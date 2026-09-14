@@ -31,32 +31,8 @@ class LeadPayload(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, object]:
-    settings = get_settings()
-    has_whapi = bool((settings.whapi_token or "").strip())
-    has_sheet_id = bool((settings.google_sheet_id or "").strip())
-    has_sheet_creds = bool(
-        (settings.google_service_account_json or "").strip()
-        or (settings.google_service_account_file or "").strip()
-    )
-    return {
-        "status": "ok",
-        "whapi_configured": has_whapi,
-        "google_sheet_id_set": has_sheet_id,
-        "google_creds_set": has_sheet_creds,
-        "provider": "whapi",
-    }
-
-
-@app.on_event("startup")
-def log_config_status() -> None:
-    settings = get_settings()
-    logger.info(
-        "Startup config: whapi=%s sheet_id=%s sheet_creds=%s",
-        bool((settings.whapi_token or "").strip()),
-        bool((settings.google_sheet_id or "").strip()),
-        bool((settings.google_service_account_json or "").strip()),
-    )
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/webhook/lead")
