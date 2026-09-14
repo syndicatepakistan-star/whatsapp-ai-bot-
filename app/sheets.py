@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,21 @@ SCOPES = [
 ]
 
 HEADERS = ["timestamp", "name", "email", "phone", "status", "notes"]
+_SHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
+
+
+def normalize_sheet_id(raw: str) -> str:
+    """Accept either a bare ID or a full Google Sheets URL."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    match = _SHEET_ID_RE.search(text)
+    if match:
+        return match.group(1)
+    # Bare ID (no URL chars)
+    if "/" not in text and " " not in text:
+        return text
+    return text
 
 
 class GoogleSheetsClient:
@@ -43,12 +59,21 @@ class GoogleSheetsClient:
         if self._worksheet is not None:
             return self._worksheet
 
-        if not self.settings.google_sheet_id:
+        sheet_id = normalize_sheet_id(self.settings.google_sheet_id)
+        if not sheet_id:
             raise RuntimeError("GOOGLE_SHEET_ID is not set")
 
         credentials = self._load_credentials()
         client = gspread.authorize(credentials)
-        spreadsheet = client.open_by_key(self.settings.google_sheet_id)
+        try:
+            spreadsheet = client.open_by_key(sheet_id)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Cannot open Google Sheet id={sheet_id!r}. "
+                "Use only the ID from /d/SHEET_ID/edit, share the sheet with the "
+                "service account client_email as Editor, and enable Sheets+Drive APIs. "
+                f"Original error: {exc}"
+            ) from exc
 
         try:
             worksheet = spreadsheet.worksheet(self.settings.google_sheet_worksheet)

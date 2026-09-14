@@ -27,11 +27,36 @@ class LeadPayload(BaseModel):
     email: str = Field(default="", max_length=320)
     phone: str = Field(default="", max_length=40)
     source: str = Field(default="", max_length=100)
+    intake_url: str = Field(default="", max_length=500)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    settings = get_settings()
+    has_whapi = bool((settings.whapi_token or "").strip())
+    has_sheet_id = bool((settings.google_sheet_id or "").strip())
+    has_sheet_creds = bool(
+        (settings.google_service_account_json or "").strip()
+        or (settings.google_service_account_file or "").strip()
+    )
+    return {
+        "status": "ok",
+        "whapi_configured": has_whapi,
+        "google_sheet_id_set": has_sheet_id,
+        "google_creds_set": has_sheet_creds,
+        "provider": "whapi",
+    }
+
+
+@app.on_event("startup")
+def log_config_status() -> None:
+    settings = get_settings()
+    logger.info(
+        "Startup config: whapi=%s sheet_id=%s sheet_creds=%s",
+        bool((settings.whapi_token or "").strip()),
+        bool((settings.google_sheet_id or "").strip()),
+        bool((settings.google_service_account_json or "").strip()),
+    )
 
 
 @app.post("/webhook/lead")
@@ -53,11 +78,12 @@ def receive_lead(
         raise HTTPException(status_code=400, detail="phone is required")
 
     logger.info(
-        "Lead received name=%s email=%s phone=%s source=%s",
+        "Lead received name=%s email=%s phone=%s source=%s intake_url=%s",
         payload.name,
         payload.email,
         payload.phone,
         payload.source or "unknown",
+        (payload.intake_url or "")[:120],
     )
 
     workflow = LeadWorkflow(settings)
@@ -65,6 +91,7 @@ def receive_lead(
         name=payload.name,
         email=payload.email,
         phone=payload.phone,
+        intake_url=payload.intake_url,
     )
 
     return {
@@ -72,5 +99,6 @@ def receive_lead(
         "action": result.action,
         "status": result.status,
         "phone_e164": result.phone_e164,
+        "intake_url": result.intake_url,
         "detail": result.detail,
     }

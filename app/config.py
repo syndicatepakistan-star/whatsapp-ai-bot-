@@ -22,13 +22,17 @@ class Settings(BaseSettings):
     google_sheet_id: str = ""
     google_sheet_worksheet: str = "Leads"
 
-    whatsapp_token: str = ""
-    whatsapp_phone_number_id: str = ""
-    whatsapp_api_version: str = "v21.0"
-    whatsapp_template_name: str = ""
-    whatsapp_template_language: str = "en"
-    # Set true only if your approved template body has {{1}} for the name
-    whatsapp_template_has_name_param: bool = True
+    # Used to build intake links when website does not send intake_url
+    intake_base_url: str = "https://the-syndicate.com"
+
+    # Whapi.Cloud
+    whapi_token: str = ""
+    whapi_api_url: str = "https://gate.whapi.cloud"
+    # Placeholders: {name}, {intake_url}, {email}
+    whapi_message_text: str = (
+        "Hi {name}, your Syn Diagnosis follow-up is ready.\n"
+        "Open your form here: {intake_url}"
+    )
 
 
 @lru_cache

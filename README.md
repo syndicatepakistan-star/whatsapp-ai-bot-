@@ -46,21 +46,14 @@ copy .env.example .env
 5. First row headers are created automatically:  
    `timestamp, name, email, phone, status, notes`
 
-### 3. WhatsApp (Meta Cloud API)
+## WhatsApp (Whapi)
 
-1. Meta Business + WhatsApp Cloud API number.  
-2. Create & approve a **message template**.  
-3. Fill in `.env`:
+Uses **Whapi.Cloud** (`WHAPI_TOKEN`, `WHAPI_API_URL`, `WHAPI_MESSAGE_TEXT`).
 
-```env
-WHATSAPP_TOKEN=...
-WHATSAPP_PHONE_NUMBER_ID=...
-WHATSAPP_TEMPLATE_NAME=your_template_name
-WHATSAPP_TEMPLATE_LANGUAGE=en
-WHATSAPP_TEMPLATE_HAS_NAME_PARAM=true
-```
+Message placeholders: `{name}`, `{email}`, `{intake_url}`  
+(Bot uses website `intake_url` if sent, otherwise builds from email.)
 
-Set `WHATSAPP_TEMPLATE_HAS_NAME_PARAM=false` if the template has no `{{1}}` variable.
+See **SETUP.md** for step-by-step Google Sheet + Whapi + Railway.
 
 ### 4. Run
 
@@ -95,10 +88,12 @@ Your site should POST:
   "name": "...",
   "email": "...",
   "phone": "...",
+  "intake_url": "https://the-syndicate.com/quiz/intake?email=...",
   "source": "syn_diagnosis_quiz"
 }
 ```
 
+(`intake_url` is optional — bot can build it from email.)
 Optional header if you set `WEBHOOK_SECRET` here:
 
 `X-Webhook-Secret: your-secret`

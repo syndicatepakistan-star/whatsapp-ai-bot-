@@ -23,55 +23,65 @@ class WhatsAppSendResult:
     message_id: str = ""
 
 
+def _digits_only(e164_phone: str) -> str:
+    """Whapi expects digits only (country code + number), no '+'."""
+    return "".join(ch for ch in (e164_phone or "") if ch.isdigit())
+
+
 class WhatsAppClient:
+    """Whapi.Cloud client: check contact + send text."""
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     def _configured(self) -> bool:
-        return bool(
-            self.settings.whatsapp_token
-            and self.settings.whatsapp_phone_number_id
-        )
+        return bool((self.settings.whapi_token or "").strip())
 
     def _base_url(self) -> str:
-        return (
-            f"https://graph.facebook.com/{self.settings.whatsapp_api_version}"
-            f"/{self.settings.whatsapp_phone_number_id}"
-        )
+        return (self.settings.whapi_api_url or "https://gate.whapi.cloud").rstrip("/")
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self.settings.whatsapp_token}",
+            "Authorization": f"Bearer {self.settings.whapi_token.strip()}",
             "Content-Type": "application/json",
+            "Accept": "application/json",
         }
 
     def check_number_on_whatsapp(self, e164_phone: str) -> WhatsAppCheckResult:
         """
-        Check if a number is registered on WhatsApp via Meta contacts endpoint.
-        Falls back to 'assume exists' only when API is not configured (dev mode).
+        Check if number is on WhatsApp via Whapi:
+        POST /contacts  { contacts: ["92300..."], blocking: "wait", force_check: true }
+        status "valid" => exists, "invalid" => does not.
         """
         if not self._configured():
-            logger.warning("WhatsApp not configured; skipping existence check")
-            return WhatsAppCheckResult(True, detail="whatsapp_not_configured_skip_check")
+            # Fail closed: do not pretend the number exists / try to send.
+            logger.error(
+                "WHAPI_TOKEN is missing on Railway. "
+                "Set WHAPI_TOKEN then redeploy. No WhatsApp message will be sent."
+            )
+            return WhatsAppCheckResult(False, detail="whapi_token_missing")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppCheckResult(False, detail="empty_phone")
 
         url = f"{self._base_url()}/contacts"
         payload = {
             "blocking": "wait",
-            "contacts": [e164_phone],
             "force_check": True,
+            "contacts": [phone],
         }
 
         try:
-            with httpx.Client(timeout=20.0) as client:
+            with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, headers=self._headers(), json=payload)
         except httpx.HTTPError as exc:
-            logger.exception("WhatsApp contacts check failed")
+            logger.exception("Whapi contacts check failed")
             return WhatsAppCheckResult(False, detail=f"contacts_request_error: {exc}")
 
         if response.status_code >= 400:
-            # Some WABA setups disallow contacts API. Treat as unknown → manual.
             logger.warning(
-                "WhatsApp contacts API error %s: %s",
+                "Whapi contacts API error %s: %s",
                 response.status_code,
                 response.text,
             )
@@ -86,65 +96,84 @@ class WhatsAppClient:
             return WhatsAppCheckResult(False, detail="no_contact_result")
 
         status = (contacts[0].get("status") or "").lower()
-        # Meta returns "valid" when the number is on WhatsApp.
         exists = status == "valid"
         return WhatsAppCheckResult(exists, detail=status or "unknown")
 
+    def send_text(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str = "",
+        intake_url: str = "",
+    ) -> WhatsAppSendResult:
+        """Send a text message via Whapi: POST /messages/text"""
+        if not self._configured():
+            return WhatsAppSendResult(False, detail="whapi_not_configured")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppSendResult(False, detail="empty_phone")
+
+        display_name = (name or "there").strip() or "there"
+        display_email = (email or "").strip().lower()
+        display_url = (intake_url or "").strip()
+
+        template = self.settings.whapi_message_text or (
+            "Hi {name}, your Syn Diagnosis follow-up is ready.\n"
+            "Open your form here: {intake_url}"
+        )
+        body = (
+            template.replace("{name}", display_name)
+            .replace("{email}", display_email)
+            .replace("{intake_url}", display_url or display_email)
+        )
+
+        url = f"{self._base_url()}/messages/text"
+        payload = {
+            "to": phone,
+            "body": body,
+        }
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(url, headers=self._headers(), json=payload)
+        except httpx.HTTPError as exc:
+            logger.exception("Whapi send failed")
+            return WhatsAppSendResult(False, detail=f"send_request_error: {exc}")
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+
+        if response.status_code >= 400:
+            logger.warning("Whapi send error %s: %s", response.status_code, data)
+            return WhatsAppSendResult(False, detail=str(data))
+
+        message_id = ""
+        if isinstance(data, dict):
+            message_id = str(
+                data.get("message", {}).get("id")
+                or data.get("id")
+                or data.get("message_id")
+                or ""
+            )
+
+        return WhatsAppSendResult(True, detail="sent", message_id=message_id)
+
+    # Backwards-compatible alias used by older workflow code
     def send_template(
         self,
         *,
         e164_phone: str,
         name: str,
+        email: str = "",
+        intake_url: str = "",
     ) -> WhatsAppSendResult:
-        if not self._configured():
-            return WhatsAppSendResult(False, detail="whatsapp_not_configured")
-
-        if not self.settings.whatsapp_template_name:
-            return WhatsAppSendResult(False, detail="whatsapp_template_name_missing")
-
-        to = e164_phone.lstrip("+")
-        url = f"{self._base_url()}/messages"
-        template: dict = {
-            "name": self.settings.whatsapp_template_name,
-            "language": {"code": self.settings.whatsapp_template_language},
-        }
-        if self.settings.whatsapp_template_has_name_param:
-            template["components"] = [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": name or "there"},
-                    ],
-                }
-            ]
-
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": to,
-            "type": "template",
-            "template": template,
-        }
-
-        try:
-            with httpx.Client(timeout=20.0) as client:
-                response = client.post(url, headers=self._headers(), json=payload)
-        except httpx.HTTPError as exc:
-            logger.exception("WhatsApp send failed")
-            return WhatsAppSendResult(False, detail=f"send_request_error: {exc}")
-
-        body = {}
-        try:
-            body = response.json()
-        except Exception:
-            body = {"raw": response.text}
-
-        if response.status_code >= 400:
-            logger.warning("WhatsApp send error %s: %s", response.status_code, body)
-            return WhatsAppSendResult(False, detail=str(body))
-
-        message_id = ""
-        messages = body.get("messages") or []
-        if messages:
-            message_id = messages[0].get("id") or ""
-
-        return WhatsAppSendResult(True, detail="sent", message_id=message_id)
+        return self.send_text(
+            e164_phone=e164_phone,
+            name=name,
+            email=email,
+            intake_url=intake_url,
+        )

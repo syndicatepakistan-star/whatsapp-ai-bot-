@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from app.config import Settings
 from app.phone_validator import validate_phone
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 STATUS_WRONG_NUMBER = "wrong number"
 STATUS_MANUAL_NEEDED = "manual follow-up needed"
-STATUS_WHATSAPP_SENT = "whatsapp template sent"
+STATUS_WHATSAPP_SENT = "whatsapp message sent"
 STATUS_WHATSAPP_SEND_FAILED = "whatsapp send failed"
 
 
@@ -22,6 +23,21 @@ class LeadResult:
     status: str
     phone_e164: str = ""
     detail: str = ""
+    intake_url: str = ""
+
+
+def build_intake_url(*, email: str, intake_url: str, intake_base_url: str) -> str:
+    """Prefer website-provided intake_url; otherwise build from email."""
+    provided = (intake_url or "").strip()
+    if provided:
+        return provided
+
+    email_norm = (email or "").strip().lower()
+    if not email_norm:
+        return ""
+
+    base = (intake_base_url or "https://the-syndicate.com").rstrip("/")
+    return f"{base}/quiz/intake?email={quote(email_norm, safe='')}"
 
 
 class LeadWorkflow:
@@ -30,10 +46,22 @@ class LeadWorkflow:
         self.sheets = GoogleSheetsClient(settings)
         self.whatsapp = WhatsAppClient(settings)
 
-    def process(self, *, name: str, email: str, phone: str) -> LeadResult:
+    def process(
+        self,
+        *,
+        name: str,
+        email: str,
+        phone: str,
+        intake_url: str = "",
+    ) -> LeadResult:
         name = (name or "").strip()
         email = (email or "").strip().lower()
         phone = (phone or "").strip()
+        resolved_intake_url = build_intake_url(
+            email=email,
+            intake_url=intake_url,
+            intake_base_url=self.settings.intake_base_url,
+        )
 
         phone_check = validate_phone(phone, self.settings.default_phone_region)
         if not phone_check.is_valid:
@@ -48,6 +76,7 @@ class LeadWorkflow:
                 action="sheet_wrong_number",
                 status=STATUS_WRONG_NUMBER,
                 detail=phone_check.reason,
+                intake_url=resolved_intake_url,
             )
 
         e164 = phone_check.e164
@@ -61,6 +90,7 @@ class LeadWorkflow:
                 notes=(
                     "WhatsApp number does not exist / could not verify. "
                     f"Detail: {wa_check.detail}. Text them manually."
+                    + (f" Intake: {resolved_intake_url}" if resolved_intake_url else "")
                 ),
             )
             return LeadResult(
@@ -68,9 +98,15 @@ class LeadWorkflow:
                 status=STATUS_MANUAL_NEEDED,
                 phone_e164=e164,
                 detail=wa_check.detail,
+                intake_url=resolved_intake_url,
             )
 
-        send = self.whatsapp.send_template(e164_phone=e164, name=name)
+        send = self.whatsapp.send_text(
+            e164_phone=e164,
+            name=name,
+            email=email,
+            intake_url=resolved_intake_url,
+        )
         if not send.ok:
             self._safe_sheet(
                 name=name,
@@ -84,6 +120,7 @@ class LeadWorkflow:
                 status=STATUS_WHATSAPP_SEND_FAILED,
                 phone_e164=e164,
                 detail=send.detail,
+                intake_url=resolved_intake_url,
             )
 
         self._safe_sheet(
@@ -91,13 +128,15 @@ class LeadWorkflow:
             email=email,
             phone=e164,
             status=STATUS_WHATSAPP_SENT,
-            notes=send.message_id or "sent",
+            notes=(send.message_id or "sent")
+            + (f" | {resolved_intake_url}" if resolved_intake_url else ""),
         )
         return LeadResult(
             action="whatsapp_sent",
             status=STATUS_WHATSAPP_SENT,
             phone_e164=e164,
             detail=send.message_id or "sent",
+            intake_url=resolved_intake_url,
         )
 
     def _safe_sheet(
