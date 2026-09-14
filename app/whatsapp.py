@@ -99,42 +99,9 @@ class WhatsAppClient:
         exists = status == "valid"
         return WhatsAppCheckResult(exists, detail=status or "unknown")
 
-    def send_text(
-        self,
-        *,
-        e164_phone: str,
-        name: str,
-        email: str = "",
-        intake_url: str = "",
-    ) -> WhatsAppSendResult:
-        """Send a text message via Whapi: POST /messages/text"""
-        if not self._configured():
-            return WhatsAppSendResult(False, detail="whapi_not_configured")
-
-        phone = _digits_only(e164_phone)
-        if not phone:
-            return WhatsAppSendResult(False, detail="empty_phone")
-
-        display_name = (name or "there").strip() or "there"
-        display_email = (email or "").strip().lower()
-        display_url = (intake_url or "").strip()
-
-        template = self.settings.whapi_message_text or (
-            "Hi {name}, your Syn Diagnosis follow-up is ready.\n"
-            "Open your form here: {intake_url}"
-        )
-        body = (
-            template.replace("{name}", display_name)
-            .replace("{email}", display_email)
-            .replace("{intake_url}", display_url or display_email)
-        )
-
+    def _post_text(self, *, phone: str, body: str) -> WhatsAppSendResult:
         url = f"{self._base_url()}/messages/text"
-        payload = {
-            "to": phone,
-            "body": body,
-        }
-
+        payload = {"to": phone, "body": body}
         try:
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(url, headers=self._headers(), json=payload)
@@ -159,8 +126,68 @@ class WhatsAppClient:
                 or data.get("message_id")
                 or ""
             )
-
         return WhatsAppSendResult(True, detail="sent", message_id=message_id)
+
+    def send_text(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str = "",
+        intake_url: str = "",
+    ) -> WhatsAppSendResult:
+        """Send via Whapi. Optionally: link first (preview card), then message text."""
+        if not self._configured():
+            return WhatsAppSendResult(False, detail="whapi_not_configured")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppSendResult(False, detail="empty_phone")
+
+        display_name = (name or "there").strip() or "there"
+        display_email = (email or "").strip().lower()
+        display_url = (intake_url or "").strip()
+
+        template = self.settings.whapi_message_text or (
+            "Hi {name},\n\nJust complete the quick form.\n\nWith Honour\nThe Syndicate"
+        )
+        # Railway often stores multiline as \n
+        template = template.replace("\\n", "\n")
+
+        body = (
+            template.replace("{name}", display_name)
+            .replace("{email}", display_email)
+            .replace("{intake_url}", display_url)
+        ).strip()
+
+        # Separate mode: preview card from URL, then clean text (no raw link in front)
+        if self.settings.whapi_link_separate and display_url:
+            link_result = self._post_text(phone=phone, body=display_url)
+            if not link_result.ok:
+                return link_result
+
+            text_only = (
+                template.replace("{name}", display_name)
+                .replace("{email}", display_email)
+                .replace("{intake_url}", "")
+            ).strip()
+            while "\n\n\n" in text_only:
+                text_only = text_only.replace("\n\n\n", "\n\n")
+
+            text_result = self._post_text(phone=phone, body=text_only or body)
+            if not text_result.ok:
+                return text_result
+            return WhatsAppSendResult(
+                True,
+                detail="sent_link_then_text",
+                message_id=text_result.message_id or link_result.message_id,
+            )
+
+        # Single message: keep URL in body (usually at the end of the template)
+        if display_url and "{intake_url}" not in template and display_url not in body:
+            body = f"{body}\n\n{display_url}"
+
+        return self._post_text(phone=phone, body=body)
 
     # Backwards-compatible alias used by older workflow code
     def send_template(

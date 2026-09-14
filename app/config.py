@@ -29,10 +29,17 @@ class Settings(BaseSettings):
     whapi_token: str = ""
     whapi_api_url: str = "https://gate.whapi.cloud"
     # Placeholders: {name}, {intake_url}, {email}
+    # Use \n for line breaks in Railway single-line env values
     whapi_message_text: str = (
-        "Hi {name}, your Syn Diagnosis follow-up is ready.\n"
-        "Open your form here: {intake_url}"
+        "Hi {name},\n\n"
+        "Just complete the quick form and we will schedule the exclusive audit "
+        "with our founder for some time this week\n\n"
+        "See you on the inside\n\n"
+        "With Honour\n"
+        "The Syndicate"
     )
+    # true = send link first (rich preview card), then text without raw URL
+    whapi_link_separate: bool = True
 
 
 @lru_cache
