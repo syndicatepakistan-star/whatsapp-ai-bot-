@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from app.booking_workflow import BookingWorkflow
 from app.config import get_settings
 from app.workflow import LeadWorkflow
 
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Syndicate Lead WhatsApp Bot",
-    description="Webhook receiver: validate phone → Google Sheet / WhatsApp template",
-    version="1.0.0",
+    description="Webhook receiver: quiz leads + audit booking WhatsApp (Whapi)",
+    version="1.1.0",
 )
 
 
@@ -28,6 +29,26 @@ class LeadPayload(BaseModel):
     phone: str = Field(default="", max_length=40)
     source: str = Field(default="", max_length=100)
     intake_url: str = Field(default="", max_length=500)
+
+
+class BookingPayload(BaseModel):
+    name: str = Field(default="", max_length=200)
+    email: str = Field(default="", max_length=320)
+    phone: str = Field(default="", max_length=40)
+    meet_link: str = Field(default="", max_length=500)
+    slot_start: str = Field(default="", max_length=64)
+    slot_end: str = Field(default="", max_length=64)
+    timezone: str = Field(default="Asia/Karachi", max_length=64)
+    source: str = Field(default="", max_length=100)
+    intake_ref: str = Field(default="", max_length=128)
+    booking_id: int | str | None = None
+
+
+def _check_webhook_secret(x_webhook_secret: str | None) -> None:
+    settings = get_settings()
+    if settings.webhook_secret:
+        if (x_webhook_secret or "") != settings.webhook_secret:
+            raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
 
 @app.get("/health")
@@ -44,11 +65,8 @@ def receive_lead(
     Website calls this when a quiz lead is saved.
     Purpose of this webhook URL: bridge between website and this automation.
     """
+    _check_webhook_secret(x_webhook_secret)
     settings = get_settings()
-
-    if settings.webhook_secret:
-        if (x_webhook_secret or "") != settings.webhook_secret:
-            raise HTTPException(status_code=401, detail="Invalid webhook secret")
 
     if not (payload.phone or "").strip():
         raise HTTPException(status_code=400, detail="phone is required")
@@ -78,3 +96,79 @@ def receive_lead(
         "intake_url": result.intake_url,
         "detail": result.detail,
     }
+
+
+@app.post("/webhook/booking")
+def receive_booking(
+    payload: BookingPayload,
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Website calls this after a successful audit booking.
+    Sends WhatsApp with Meet link and logs to Bookings sheet.
+    """
+    _check_webhook_secret(x_webhook_secret)
+    settings = get_settings()
+
+    if not (payload.phone or "").strip():
+        raise HTTPException(status_code=400, detail="phone is required")
+    if not (payload.meet_link or "").strip():
+        raise HTTPException(status_code=400, detail="meet_link is required")
+    if not (payload.slot_start or "").strip():
+        raise HTTPException(status_code=400, detail="slot_start is required")
+
+    booking_id = "" if payload.booking_id is None else str(payload.booking_id)
+
+    logger.info(
+        "Booking received name=%s email=%s phone=%s slot=%s meet=%s booking_id=%s",
+        payload.name,
+        payload.email,
+        payload.phone,
+        payload.slot_start,
+        (payload.meet_link or "")[:80],
+        booking_id,
+    )
+
+    workflow = BookingWorkflow(settings)
+    result = workflow.process(
+        name=payload.name,
+        email=payload.email,
+        phone=payload.phone,
+        meet_link=payload.meet_link,
+        slot_start=payload.slot_start,
+        slot_end=payload.slot_end,
+        timezone_name=payload.timezone or "Asia/Karachi",
+        booking_id=booking_id,
+    )
+
+    return {
+        "ok": True,
+        "action": result.action,
+        "status": result.status,
+        "phone_e164": result.phone_e164,
+        "slot_local": result.slot_local,
+        "detail": result.detail,
+    }
+
+
+@app.post("/cron/reminders")
+@app.get("/cron/reminders")
+def run_reminders(
+    x_cron_secret: str | None = Header(default=None),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Call every 5–15 minutes (Railway cron / external ping).
+    Sends WhatsApp reminders for upcoming booked audits.
+    Auth: CRON_SECRET (X-Cron-Secret) or WEBHOOK_SECRET (X-Webhook-Secret).
+    """
+    settings = get_settings()
+    expected = (settings.cron_secret or settings.webhook_secret or "").strip()
+    provided = (x_cron_secret or x_webhook_secret or "").strip()
+    if expected and provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid cron/webhook secret")
+
+    workflow = BookingWorkflow(settings)
+    result = workflow.process_due_reminders()
+    logger.info("Reminders tick result=%s", result)
+    return result

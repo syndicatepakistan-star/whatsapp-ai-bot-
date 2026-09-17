@@ -100,6 +100,44 @@ Optional header if you set `WEBHOOK_SECRET` here:
 
 ---
 
+## Audit booking WhatsApp (Meet link + reminder)
+
+Website sets:
+
+```env
+BOOKING_WEBHOOK_URL=https://YOUR-SERVER/webhook/booking
+BOOKING_WEBHOOK_SECRET=   # optional; match WEBHOOK_SECRET here
+```
+
+After a successful book, the website POSTs:
+
+```json
+{
+  "name": "...",
+  "email": "...",
+  "phone": "+44...",
+  "meet_link": "https://meet.google.com/...",
+  "slot_start": "2026-09-23T10:00:00Z",
+  "slot_end": "2026-09-23T10:30:00Z",
+  "timezone": "Asia/Karachi",
+  "source": "audit_booking",
+  "booking_id": 12
+}
+```
+
+Bot sends Whapi message and logs to Google Sheet tab **Bookings**.
+
+### Reminders
+
+Hit every 5–15 minutes (Railway cron):
+
+`GET or POST https://YOUR-SERVER/cron/reminders`  
+Header: `X-Cron-Secret: YOUR_CRON_SECRET` (or `X-Webhook-Secret` if using `WEBHOOK_SECRET`)
+
+Sends reminder when the slot is within `BOOKING_REMINDER_MINUTES_BEFORE` (default 60).
+
+---
+
 ## Deploy tip
 
 Use Railway / Render / any VPS. Expose HTTPS. Point `LEAD_WEBHOOK_URL` on the website to that public URL.

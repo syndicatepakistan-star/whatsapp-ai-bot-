@@ -41,6 +41,32 @@ class Settings(BaseSettings):
     # true = send link first (rich preview card), then text without raw URL
     whapi_link_separate: bool = True
 
+    # Audit booking confirmation message.
+    # Placeholders: {name} {email} {meet_link} {slot_local} {timezone}
+    whapi_booking_message_text: str = (
+        "Hi {name},\n\n"
+        "Your founder audit is booked.\n\n"
+        "Time: {slot_local}\n"
+        "Join with Google Meet:\n{meet_link}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
+    # Reminder message. Same placeholders.
+    whapi_booking_reminder_text: str = (
+        "Hi {name},\n\n"
+        "Reminder: your founder audit starts soon.\n\n"
+        "Time: {slot_local}\n"
+        "Join here:\n{meet_link}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
+    # Minutes before slot_start to send reminder (default 60).
+    booking_reminder_minutes_before: int = 60
+    # Worksheet name for audit bookings (same spreadsheet as leads).
+    google_sheet_bookings_worksheet: str = "Bookings"
+    # Optional shared secret for /cron/reminders (Railway cron header).
+    cron_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

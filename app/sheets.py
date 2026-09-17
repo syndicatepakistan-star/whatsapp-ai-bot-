@@ -19,6 +19,21 @@ SCOPES = [
 ]
 
 HEADERS = ["timestamp", "name", "email", "phone", "status", "notes"]
+
+BOOKING_HEADERS = [
+    "timestamp",
+    "name",
+    "email",
+    "phone",
+    "status",
+    "notes",
+    "meet_link",
+    "slot_start",
+    "slot_end",
+    "timezone",
+    "booking_id",
+    "reminder_sent",
+]
 _SHEET_ID_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
 
 
@@ -91,6 +106,29 @@ class GoogleSheetsClient:
         self._worksheet = worksheet
         return worksheet
 
+    def _get_bookings_worksheet(self):
+        sheet_id = normalize_sheet_id(self.settings.google_sheet_id)
+        if not sheet_id:
+            raise RuntimeError("GOOGLE_SHEET_ID is not set")
+
+        credentials = self._load_credentials()
+        client = gspread.authorize(credentials)
+        spreadsheet = client.open_by_key(sheet_id)
+        title = (self.settings.google_sheet_bookings_worksheet or "Bookings").strip() or "Bookings"
+        try:
+            worksheet = spreadsheet.worksheet(title)
+        except gspread.WorksheetNotFound:
+            worksheet = spreadsheet.add_worksheet(
+                title=title,
+                rows=1000,
+                cols=len(BOOKING_HEADERS),
+            )
+
+        existing = worksheet.row_values(1)
+        if not existing:
+            worksheet.append_row(BOOKING_HEADERS, value_input_option="USER_ENTERED")
+        return worksheet
+
     def append_lead(
         self,
         *,
@@ -107,3 +145,59 @@ class GoogleSheetsClient:
             value_input_option="USER_ENTERED",
         )
         logger.info("Sheet row added status=%s phone=%s", status, phone)
+
+    def append_booking(
+        self,
+        *,
+        name: str,
+        email: str,
+        phone: str,
+        status: str,
+        notes: str = "",
+        meet_link: str = "",
+        slot_start: str = "",
+        slot_end: str = "",
+        timezone_name: str = "",
+        booking_id: str = "",
+        reminder_sent: str = "no",
+    ) -> None:
+        worksheet = self._get_bookings_worksheet()
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        worksheet.append_row(
+            [
+                timestamp,
+                name,
+                email,
+                phone,
+                status,
+                notes,
+                meet_link,
+                slot_start,
+                slot_end,
+                timezone_name,
+                booking_id,
+                reminder_sent,
+            ],
+            value_input_option="USER_ENTERED",
+        )
+        logger.info("Booking sheet row added status=%s phone=%s", status, phone)
+
+    def list_booking_rows(self) -> list[dict]:
+        """Return booking rows as dicts (1-based sheet row index included)."""
+        worksheet = self._get_bookings_worksheet()
+        values = worksheet.get_all_values()
+        if len(values) < 2:
+            return []
+        header = [h.strip().lower() for h in values[0]]
+        rows: list[dict] = []
+        for i, raw in enumerate(values[1:], start=2):
+            padded = list(raw) + [""] * max(0, len(header) - len(raw))
+            item = {header[j]: padded[j] for j in range(len(header))}
+            item["_row"] = i
+            rows.append(item)
+        return rows
+
+    def mark_booking_reminder_sent(self, row_number: int) -> None:
+        worksheet = self._get_bookings_worksheet()
+        # reminder_sent is column L (12)
+        worksheet.update_cell(row_number, 12, "yes")
