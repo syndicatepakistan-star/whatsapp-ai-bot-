@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.booking_workflow import BookingWorkflow
 from app.config import get_settings
+from app.whatsapp import WhatsAppClient
 from app.workflow import LeadWorkflow
 
 logging.basicConfig(
@@ -56,6 +57,25 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/admin/groups")
+def list_groups(
+    x_webhook_secret: str | None = Header(default=None),
+    count: int = 100,
+) -> dict[str, Any]:
+    """
+    List WhatsApp groups for the linked Whapi number.
+    Use this to copy WHAPI_GROUP_ID (id ends with @g.us).
+    Auth: same WEBHOOK_SECRET as other webhooks (X-Webhook-Secret).
+    """
+    _check_webhook_secret(x_webhook_secret)
+    settings = get_settings()
+    client = WhatsAppClient(settings)
+    result = client.list_groups(count=count, offset=0)
+    result["configured_group_id"] = (settings.whapi_group_id or "").strip()
+    result["group_add_enabled"] = bool(settings.whapi_group_add_enabled)
+    return result
+
+
 @app.post("/webhook/lead")
 def receive_lead(
     payload: LeadPayload,
@@ -95,6 +115,8 @@ def receive_lead(
         "phone_e164": result.phone_e164,
         "intake_url": result.intake_url,
         "detail": result.detail,
+        "group_add_status": result.group_add_status,
+        "group_add_detail": result.group_add_detail,
     }
 
 

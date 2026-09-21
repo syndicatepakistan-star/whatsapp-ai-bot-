@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass
 from urllib.parse import quote
 
+from app.community_agent import CommunityAgent
 from app.config import Settings
 from app.phone_validator import validate_phone
 from app.sheets import GoogleSheetsClient
@@ -24,6 +25,8 @@ class LeadResult:
     phone_e164: str = ""
     detail: str = ""
     intake_url: str = ""
+    group_add_status: str = ""
+    group_add_detail: str = ""
 
 
 def build_intake_url(*, email: str, intake_url: str, intake_base_url: str) -> str:
@@ -45,6 +48,7 @@ class LeadWorkflow:
         self.settings = settings
         self.sheets = GoogleSheetsClient(settings)
         self.whatsapp = WhatsAppClient(settings)
+        self.community = CommunityAgent(settings, self.whatsapp)
 
     def process(
         self,
@@ -123,6 +127,18 @@ class LeadWorkflow:
                 intake_url=resolved_intake_url,
             )
 
+        # Sub-agent A: direct-add to WhatsApp group (invite fallback if blocked).
+        group_status = ""
+        group_detail = ""
+        try:
+            community = self.community.add_lead_to_group(name=name, e164_phone=e164)
+            group_status = community.status
+            group_detail = community.detail
+        except Exception as exc:
+            logger.exception("Community agent failed phone=%s", e164)
+            group_status = "failed"
+            group_detail = f"exception: {exc}"
+
         self._safe_sheet(
             name=name,
             email=email,
@@ -130,6 +146,8 @@ class LeadWorkflow:
             status=STATUS_WHATSAPP_SENT,
             notes=(send.message_id or "sent")
             + (f" | {resolved_intake_url}" if resolved_intake_url else ""),
+            group_add_status=group_status,
+            group_add_detail=group_detail,
         )
         return LeadResult(
             action="whatsapp_sent",
@@ -137,6 +155,8 @@ class LeadWorkflow:
             phone_e164=e164,
             detail=send.message_id or "sent",
             intake_url=resolved_intake_url,
+            group_add_status=group_status,
+            group_add_detail=group_detail,
         )
 
     def _safe_sheet(
@@ -147,6 +167,8 @@ class LeadWorkflow:
         phone: str,
         status: str,
         notes: str = "",
+        group_add_status: str = "",
+        group_add_detail: str = "",
     ) -> None:
         try:
             self.sheets.append_lead(
@@ -155,6 +177,8 @@ class LeadWorkflow:
                 phone=phone,
                 status=status,
                 notes=notes,
+                group_add_status=group_add_status,
+                group_add_detail=group_add_detail,
             )
         except Exception:
             logger.exception("Failed to write Google Sheet status=%s", status)

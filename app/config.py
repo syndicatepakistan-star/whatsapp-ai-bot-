@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     port: int = 8080
     webhook_secret: str = ""
 
-    default_phone_region: str = "PK"
+    default_phone_region: str = "UK"
 
     google_service_account_file: str = "credentials/google-service-account.json"
     # Paste full service-account JSON as one line (preferred on Railway)
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     intake_base_url: str = "https://the-syndicate.com"
 
     # Whapi.Cloud
-    whapi_token: str = ""
+    whapi_token: str = "Cna6B5pLbxvpOXOf9o1Qdeabowk1BriI"
     whapi_api_url: str = "https://gate.whapi.cloud"
     # Placeholders: {name}, {intake_url}, {email}
     # Use \n for line breaks in Railway single-line env values
@@ -66,6 +66,25 @@ class Settings(BaseSettings):
     google_sheet_bookings_worksheet: str = "Bookings"
     # Optional shared secret for /cron/reminders (Railway cron header).
     cron_secret: str = ""
+
+    # Sub-agent A: direct add to WhatsApp group after successful lead WA message.
+    # Group ID from GET /groups, e.g. 120363...@g.us
+    whapi_group_id: str = ""
+    # true = attempt direct add after WhatsApp message is sent
+    whapi_group_add_enabled: bool = True
+    # Optional fallback invite link if WhatsApp privacy blocks direct add
+    wa_group_invite_url: str = ""
+    # Optional channel follow/invite link (sent in same fallback DM)
+    wa_channel_invite_url: str = ""
+    # Fallback DM when direct add fails. Placeholders: {name} {group_link} {channel_link}
+    whapi_group_invite_fallback_text: str = (
+        "Hi {name},\n\n"
+        "Welcome inside The Syndicate.\n"
+        "Join our private group here:\n{group_link}\n\n"
+        "Follow the channel here:\n{channel_link}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
 
 
 @lru_cache

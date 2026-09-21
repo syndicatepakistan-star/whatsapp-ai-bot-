@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import httpx
 
@@ -23,13 +24,21 @@ class WhatsAppSendResult:
     message_id: str = ""
 
 
+@dataclass
+class GroupAddResult:
+    ok: bool
+    detail: str = ""
+    processed: list[str] | None = None
+    failed: list[str] | None = None
+
+
 def _digits_only(e164_phone: str) -> str:
     """Whapi expects digits only (country code + number), no '+'."""
     return "".join(ch for ch in (e164_phone or "") if ch.isdigit())
 
 
 class WhatsAppClient:
-    """Whapi.Cloud client: check contact + send text."""
+    """Whapi.Cloud client: contacts, text, groups."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -188,6 +197,160 @@ class WhatsAppClient:
             body = f"{body}\n\n{display_url}"
 
         return self._post_text(phone=phone, body=body)
+
+    def list_groups(self, *, count: int = 100, offset: int = 0) -> dict:
+        """
+        List WhatsApp groups for this Whapi channel.
+        GET /groups → each item has id like 1203...@g.us and name.
+        """
+        if not self._configured():
+            return {"ok": False, "error": "whapi_not_configured", "groups": []}
+
+        url = f"{self._base_url()}/groups"
+        params = {"count": max(1, min(count, 500)), "offset": max(0, offset)}
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(url, headers=self._headers(), params=params)
+        except httpx.HTTPError as exc:
+            logger.exception("Whapi list groups failed")
+            return {"ok": False, "error": f"request_error: {exc}", "groups": []}
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+
+        if response.status_code >= 400:
+            logger.warning("Whapi list groups error %s: %s", response.status_code, data)
+            return {
+                "ok": False,
+                "error": f"api_error_{response.status_code}",
+                "detail": data,
+                "groups": [],
+            }
+
+        groups = data.get("groups") if isinstance(data, dict) else None
+        if groups is None and isinstance(data, list):
+            groups = data
+        if not isinstance(groups, list):
+            groups = []
+
+        simplified = []
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            simplified.append(
+                {
+                    "id": g.get("id") or "",
+                    "name": g.get("name") or g.get("subject") or "",
+                    "participants_count": len(g.get("participants") or []),
+                }
+            )
+        return {
+            "ok": True,
+            "groups": simplified,
+            "total": (data.get("total") if isinstance(data, dict) else len(simplified)),
+            "count": len(simplified),
+            "offset": offset,
+        }
+
+    def add_to_group(
+        self,
+        *,
+        e164_phone: str,
+        group_id: str = "",
+    ) -> GroupAddResult:
+        """
+        Direct-add a contact to a WhatsApp group.
+        POST /groups/{GroupID}/participants
+        Body: { "participants": ["92300..."] }
+        Bot number must be group admin. Some users block being added (privacy).
+        """
+        if not self._configured():
+            return GroupAddResult(False, detail="whapi_not_configured")
+
+        gid = (group_id or self.settings.whapi_group_id or "").strip()
+        if not gid:
+            return GroupAddResult(False, detail="whapi_group_id_missing")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return GroupAddResult(False, detail="empty_phone")
+
+        # Path may contain @ — encode for URL path.
+        encoded_gid = quote(gid, safe="")
+        url = f"{self._base_url()}/groups/{encoded_gid}/participants"
+        payload = {"participants": [phone]}
+
+        try:
+            with httpx.Client(timeout=45.0) as client:
+                response = client.post(url, headers=self._headers(), json=payload)
+        except httpx.HTTPError as exc:
+            logger.exception("Whapi add_to_group failed phone=%s", phone)
+            return GroupAddResult(False, detail=f"request_error: {exc}")
+
+        try:
+            data = response.json()
+        except Exception:
+            data = {"raw": response.text}
+
+        if response.status_code >= 400:
+            logger.warning(
+                "Whapi add_to_group error %s phone=%s data=%s",
+                response.status_code,
+                phone,
+                data,
+            )
+            return GroupAddResult(False, detail=str(data))
+
+        processed: list[str] = []
+        failed: list[str] = []
+        if isinstance(data, dict):
+            processed = [str(x) for x in (data.get("processed") or [])]
+            failed = [str(x) for x in (data.get("failed") or [])]
+            # Some responses use success bool without lists
+            if data.get("success") is True and not processed and not failed:
+                processed = [phone]
+
+        phone_failed = phone in failed or any(phone in f for f in failed)
+        phone_ok = phone in processed or any(phone in p for p in processed)
+
+        if phone_ok and not phone_failed:
+            return GroupAddResult(
+                True,
+                detail="added",
+                processed=processed,
+                failed=failed,
+            )
+        if phone_failed:
+            return GroupAddResult(
+                False,
+                detail="add_failed_privacy_or_policy",
+                processed=processed,
+                failed=failed,
+            )
+        # Ambiguous success — treat HTTP 200 with empty failed as ok
+        if isinstance(data, dict) and data.get("success") is True:
+            return GroupAddResult(True, detail="added", processed=processed, failed=failed)
+
+        return GroupAddResult(
+            False,
+            detail=f"ambiguous_response: {data}",
+            processed=processed,
+            failed=failed,
+        )
+
+    def send_raw_text(self, *, e164_phone: str, body: str) -> WhatsAppSendResult:
+        """Send a plain text DM (used for group/channel invite fallback)."""
+        if not self._configured():
+            return WhatsAppSendResult(False, detail="whapi_not_configured")
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppSendResult(False, detail="empty_phone")
+        text = (body or "").replace("\\n", "\n").strip()
+        if not text:
+            return WhatsAppSendResult(False, detail="empty_body")
+        return self._post_text(phone=phone, body=text)
 
     # Backwards-compatible alias used by older workflow code
     def send_template(
