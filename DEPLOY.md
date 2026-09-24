@@ -95,6 +95,8 @@ Remove any `127.0.0.1` or ngrok URL.
 3. Google Sheet → new row
 4. WhatsApp → template sent (once Whapi/Meta credentials are set)
 
+Agent B videos need **ffmpeg** on Railway (`nixpacks.toml` installs it). After deploy, confirm build logs mention ffmpeg.
+
 ---
 
 ## Whapi note

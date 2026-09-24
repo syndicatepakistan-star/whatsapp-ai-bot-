@@ -1,0 +1,3 @@
+# Railway / Nixpacks: ffmpeg required for Agent B video remux/compress
+[phases.setup]
+nixPkgs = ["ffmpeg"]
