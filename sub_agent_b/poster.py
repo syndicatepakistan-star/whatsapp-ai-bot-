@@ -95,6 +95,17 @@ class ContentPoster:
                 result.details.append({"row": row_num, "status": "failed", "detail": "bad_datetime"})
                 continue
 
+            # Claim row immediately so overlapping cron ticks don't double-post
+            row_num = int(row["_row"])
+            try:
+                self.sheets.mark_result(
+                    row_num,
+                    status="processing",
+                    notes="Downloading / encoding…",
+                )
+            except Exception:
+                logger.warning("Could not mark row=%s processing", row_num)
+
             item = self._post_row(row, group_id=group_id, channel_id=channel_id)
             result.processed += 1
             if item.get("status") == "posted":

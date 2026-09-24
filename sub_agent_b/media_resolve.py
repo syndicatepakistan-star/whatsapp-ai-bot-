@@ -332,29 +332,47 @@ class MediaResolver:
             f"https://www.googleapis.com/drive/v3/files/{real_id}"
             f"?alt=media&supportsAllDrives=true"
         )
-        with httpx.Client(timeout=300.0, follow_redirects=True) as client:
-            response = client.get(
-                download_url,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        if response.status_code >= 400:
-            raise RuntimeError(
-                f"drive_media_error_{response.status_code}: {response.text[:300]}"
-            )
-        data = response.content
-        if not data or len(data) < 64:
-            raise RuntimeError("drive_empty_download")
-
         suffix = Path(name).suffix or (
             ".mp4" if media_type == "video" else ".bin"
         )
         tmp = Path(tempfile.mkstemp(suffix=suffix)[1])
-        tmp.write_bytes(data)
+        bytes_written = 0
+        try:
+            with httpx.Client(timeout=300.0, follow_redirects=True) as client:
+                with client.stream(
+                    "GET",
+                    download_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as response:
+                    if response.status_code >= 400:
+                        body = response.read()[:300]
+                        raise RuntimeError(
+                            f"drive_media_error_{response.status_code}: {body!r}"
+                        )
+                    with tmp.open("wb") as handle:
+                        for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                            if chunk:
+                                handle.write(chunk)
+                                bytes_written += len(chunk)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+
+        if bytes_written < 64:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise RuntimeError("drive_empty_download")
+
         logger.info(
             "Drive API downloaded id=%s name=%s bytes=%s",
             real_id,
             name,
-            len(data),
+            bytes_written,
         )
         return ResolvedMedia(
             path=tmp,
@@ -410,12 +428,22 @@ class MediaResolver:
                         source="ffmpeg_remux",
                     )
 
-        # Pass 2: re-encode H.264/AAC, scale down if needed, target under size cap
-        crf = "28"
-        if size > 80 * 1024 * 1024:
-            crf = "30"
-        if size > 120 * 1024 * 1024:
+        # Pass 2: re-encode H.264/AAC; large sources get smaller scale + higher CRF
+        if size > 100 * 1024 * 1024:
+            scale = "scale='min(720,iw)':-2"
             crf = "32"
+            audio_br = "96k"
+            preset = "veryfast"
+        elif size > 60 * 1024 * 1024:
+            scale = "scale='min(960,iw)':-2"
+            crf = "30"
+            audio_br = "112k"
+            preset = "fast"
+        else:
+            scale = "scale='min(1280,iw)':-2"
+            crf = "28"
+            audio_br = "128k"
+            preset = "fast"
 
         encode_ok = self._run_ffmpeg(
             [
@@ -424,17 +452,17 @@ class MediaResolver:
                 "-i",
                 str(src),
                 "-vf",
-                "scale='min(1280,iw)':-2",
+                scale,
                 "-c:v",
                 "libx264",
                 "-preset",
-                "fast",
+                preset,
                 "-crf",
                 crf,
                 "-c:a",
                 "aac",
                 "-b:a",
-                "128k",
+                audio_br,
                 "-movflags",
                 "+faststart",
                 "-pix_fmt",

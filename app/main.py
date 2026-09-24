@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from app.booking_workflow import BookingWorkflow
@@ -231,30 +231,56 @@ def list_channels(
 @app.post("/cron/content-posts")
 @app.get("/cron/content-posts")
 def run_content_posts(
+    background_tasks: BackgroundTasks,
     x_cron_secret: str | None = Header(default=None),
     x_webhook_secret: str | None = Header(default=None),
+    wait: bool = False,
 ) -> dict[str, Any]:
     """
     Sub-agent B cron: post due ContentCalendar rows to group and/or channel.
-    Call every 5–15 minutes (Railway cron).
-    Auth: CRON_SECRET (X-Cron-Secret) or WEBHOOK_SECRET (X-Webhook-Secret).
+
+    By default returns immediately and processes in the background so external
+    cron (cron-job.org ~15–30s) does not get 502 while video encode runs.
+    Pass ?wait=1 to run synchronously (local debugging).
     """
     _check_cron_secret(x_cron_secret, x_webhook_secret)
     settings = get_settings()
-    result = ContentPoster(settings).run_due()
-    logger.info(
-        "Content posts tick processed=%s posted=%s failed=%s detail=%s",
-        result.processed,
-        result.posted,
-        result.failed,
-        result.detail,
-    )
+
+    if wait:
+        result = ContentPoster(settings).run_due()
+        logger.info(
+            "Content posts tick processed=%s posted=%s failed=%s detail=%s",
+            result.processed,
+            result.posted,
+            result.failed,
+            result.detail,
+        )
+        return {
+            "ok": result.ok,
+            "processed": result.processed,
+            "posted": result.posted,
+            "failed": result.failed,
+            "skipped": result.skipped,
+            "detail": result.detail,
+            "details": result.details,
+        }
+
+    def _tick() -> None:
+        try:
+            result = ContentPoster(settings).run_due()
+            logger.info(
+                "Content posts background tick processed=%s posted=%s failed=%s detail=%s",
+                result.processed,
+                result.posted,
+                result.failed,
+                result.detail,
+            )
+        except Exception:
+            logger.exception("Content posts background tick failed")
+
+    background_tasks.add_task(_tick)
     return {
-        "ok": result.ok,
-        "processed": result.processed,
-        "posted": result.posted,
-        "failed": result.failed,
-        "skipped": result.skipped,
-        "detail": result.detail,
-        "details": result.details,
+        "ok": True,
+        "accepted": True,
+        "detail": "content_posts_started_in_background",
     }
