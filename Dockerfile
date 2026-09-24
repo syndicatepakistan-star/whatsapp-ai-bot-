@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY sub_agent_b ./sub_agent_b
+COPY start.py ./start.py
 
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Do not use shell $PORT — Railway may pass it literally to uvicorn
+CMD ["python", "start.py"]
