@@ -8,7 +8,9 @@ import uvicorn
 
 
 def main() -> None:
-    port = int(os.environ.get("PORT") or "8080")
+    raw = os.environ.get("PORT") or "8080"
+    port = int(raw)
+    print(f"Starting uvicorn host=0.0.0.0 port={port} (PORT env={os.environ.get('PORT')!r})", flush=True)
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
