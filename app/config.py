@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # Used to build intake links when website does not send intake_url
     intake_base_url: str = "https://the-syndicate.com"
 
-    # Whapi.Cloud
-    whapi_token: str = "Cna6B5pLbxvpOXOf9o1Qdeabowk1BriI"
+    # Whapi.Cloud (set WHAPI_TOKEN in .env / Railway — do not hardcode)
+    whapi_token: str = ""
     whapi_api_url: str = "https://gate.whapi.cloud"
     # Placeholders: {name}, {intake_url}, {email}
     # Use \n for line breaks in Railway single-line env values
@@ -85,6 +85,18 @@ class Settings(BaseSettings):
         "With Honour\n"
         "The Syndicate"
     )
+
+    # Sub-agent B: sheet → WhatsApp group/channel content poster
+    # Channel ID from GET /newsletters or GET /admin/channels (...@newsletter)
+    whapi_channel_id: str = ""
+    google_sheet_content_worksheet: str = "ContentCalendar"
+    content_timezone: str = "Asia/Karachi"
+    content_poster_enabled: bool = True
+    content_poster_max_per_run: int = 5
+    content_poster_delay_seconds: float = 2.0
+    # Optional: only allow Drive files inside this folder (share folder once with SA)
+    # Folder ID from drive.google.com/drive/folders/FOLDER_ID
+    google_drive_content_folder_id: str = ""
 
 
 @lru_cache

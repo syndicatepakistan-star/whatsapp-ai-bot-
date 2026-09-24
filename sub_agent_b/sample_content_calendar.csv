@@ -1,0 +1,4 @@
+date,time,target,type,file_url,caption,status,posted_at,notes
+2026-09-21,10:00,both,text,,Agent B test — hello group and channel,pending,,
+2026-09-21,18:00,both,video,https://www.tiktok.com/@example/video/0000000000000000000,Evening TikTok — Agent B downloads real mp4,pending,,
+2026-09-22,09:00,channel,video,https://youtu.be/dQw4w9WgXcQ,Optional YouTube example,pending,,

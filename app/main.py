@@ -10,6 +10,8 @@ from app.booking_workflow import BookingWorkflow
 from app.config import get_settings
 from app.whatsapp import WhatsAppClient
 from app.workflow import LeadWorkflow
+from sub_agent_b.media_whapi import MediaWhapiClient
+from sub_agent_b.poster import ContentPoster
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Syndicate Lead WhatsApp Bot",
-    description="Webhook receiver: quiz leads + audit booking WhatsApp (Whapi)",
-    version="1.1.0",
+    description="Webhook receiver: quiz leads + audit booking + Sub-agent B content poster (Whapi)",
+    version="1.2.0",
 )
 
 
@@ -194,3 +196,65 @@ def run_reminders(
     result = workflow.process_due_reminders()
     logger.info("Reminders tick result=%s", result)
     return result
+
+
+def _check_cron_secret(
+    x_cron_secret: str | None,
+    x_webhook_secret: str | None,
+) -> None:
+    settings = get_settings()
+    expected = (settings.cron_secret or settings.webhook_secret or "").strip()
+    provided = (x_cron_secret or x_webhook_secret or "").strip()
+    if expected and provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid cron/webhook secret")
+
+
+@app.get("/admin/channels")
+def list_channels(
+    x_webhook_secret: str | None = Header(default=None),
+    count: int = 100,
+) -> dict[str, Any]:
+    """
+    List WhatsApp channels (newsletters) for the linked Whapi number.
+    Use this to copy WHAPI_CHANNEL_ID (id ends with @newsletter).
+    Auth: X-Webhook-Secret when WEBHOOK_SECRET is set.
+    """
+    _check_webhook_secret(x_webhook_secret)
+    settings = get_settings()
+    result = MediaWhapiClient(settings).list_newsletters(count=count, offset=0)
+    result["configured_channel_id"] = (settings.whapi_channel_id or "").strip()
+    result["configured_group_id"] = (settings.whapi_group_id or "").strip()
+    result["content_poster_enabled"] = bool(settings.content_poster_enabled)
+    return result
+
+
+@app.post("/cron/content-posts")
+@app.get("/cron/content-posts")
+def run_content_posts(
+    x_cron_secret: str | None = Header(default=None),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Sub-agent B cron: post due ContentCalendar rows to group and/or channel.
+    Call every 5–15 minutes (Railway cron).
+    Auth: CRON_SECRET (X-Cron-Secret) or WEBHOOK_SECRET (X-Webhook-Secret).
+    """
+    _check_cron_secret(x_cron_secret, x_webhook_secret)
+    settings = get_settings()
+    result = ContentPoster(settings).run_due()
+    logger.info(
+        "Content posts tick processed=%s posted=%s failed=%s detail=%s",
+        result.processed,
+        result.posted,
+        result.failed,
+        result.detail,
+    )
+    return {
+        "ok": result.ok,
+        "processed": result.processed,
+        "posted": result.posted,
+        "failed": result.failed,
+        "skipped": result.skipped,
+        "detail": result.detail,
+        "details": result.details,
+    }
