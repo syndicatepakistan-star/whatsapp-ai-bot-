@@ -1,3 +1,5 @@
-# Railway / Nixpacks: ffmpeg required for Agent B video remux/compress
+# Fallback if someone builds with Nixpacks instead of Dockerfile.
+# Keep "..." so Python provider packages are not replaced.
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["...", "ffmpeg"]
+aptPkgs = ["...", "ffmpeg"]

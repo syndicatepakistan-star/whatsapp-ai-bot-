@@ -365,7 +365,17 @@ class MediaResolver:
         )
 
     def _ffmpeg_bin(self) -> str:
-        return shutil.which("ffmpeg") or "ffmpeg"
+        found = shutil.which("ffmpeg")
+        if found:
+            return found
+        for candidate in (
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/nix/var/nix/profiles/default/bin/ffmpeg",
+        ):
+            if Path(candidate).is_file():
+                return candidate
+        return "ffmpeg"
 
     def _ensure_playable_video(self, src: Path) -> ResolvedMedia:
         """
