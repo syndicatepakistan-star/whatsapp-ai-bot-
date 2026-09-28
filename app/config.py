@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     # Optional: only allow Drive files inside this folder (share folder once with SA)
     # Folder ID from drive.google.com/drive/folders/FOLDER_ID
     google_drive_content_folder_id: str = ""
+    # Folder scan → auto-fill ContentCalendar (POST /admin/content-scan-folder)
+    content_scan_default_count: int = 30
+    content_scan_default_time: str = "12:00"
+    content_scan_default_target: str = "both"
+    content_scan_default_caption: str = ""
+    # If true and caption empty, use filename (without extension) as caption
+    content_scan_caption_from_filename: bool = True
 
 
 @lru_cache

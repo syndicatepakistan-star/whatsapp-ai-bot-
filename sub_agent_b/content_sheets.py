@@ -154,6 +154,47 @@ class ContentSheetsClient:
         worksheet.update_cell(row_number, notes_col, notes[:500])
         logger.info("ContentCalendar row=%s status=%s", row_number, status)
 
+    def append_pending_rows(self, rows: list[dict[str, str]]) -> list[dict]:
+        """
+        Append ContentCalendar rows in header order.
+        Returns dicts with `_row` set to the new 1-based sheet row numbers.
+        """
+        if not rows:
+            return []
+
+        worksheet = self._get_worksheet()
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+        if not header:
+            worksheet.append_row(CONTENT_HEADERS, value_input_option="USER_ENTERED")
+            header = list(CONTENT_HEADERS)
+
+        # Ensure expected columns exist
+        missing = [h for h in CONTENT_HEADERS if h not in header]
+        if missing:
+            start_col = len(header) + 1
+            end_col = start_col + len(missing) - 1
+            worksheet.update(
+                f"R1C{start_col}:R1C{end_col}",
+                [missing],
+                value_input_option="USER_ENTERED",
+            )
+            header = header + missing
+
+        values: list[list[str]] = []
+        for row in rows:
+            values.append([(row.get(h) or "") for h in header])
+
+        before_count = len(worksheet.get_all_values())
+        worksheet.append_rows(values, value_input_option="USER_ENTERED")
+        logger.info("ContentCalendar appended %s row(s)", len(values))
+
+        created: list[dict] = []
+        for i, row in enumerate(rows):
+            item = dict(row)
+            item["_row"] = before_count + 1 + i
+            created.append(item)
+        return created
+
 
 def parse_row_datetime(row: dict, tz_name: str) -> datetime | None:
     """

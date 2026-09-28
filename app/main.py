@@ -10,6 +10,7 @@ from app.booking_workflow import BookingWorkflow
 from app.config import get_settings
 from app.whatsapp import WhatsAppClient
 from app.workflow import LeadWorkflow
+from sub_agent_b.folder_scan import FolderScanner
 from sub_agent_b.media_whapi import MediaWhapiClient
 from sub_agent_b.poster import ContentPoster
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Syndicate Lead WhatsApp Bot",
     description="Webhook receiver: quiz leads + audit booking + Sub-agent B content poster (Whapi)",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 
@@ -226,6 +227,84 @@ def list_channels(
     result["configured_group_id"] = (settings.whapi_group_id or "").strip()
     result["content_poster_enabled"] = bool(settings.content_poster_enabled)
     return result
+
+
+class ContentScanPayload(BaseModel):
+    """Optional body for POST /admin/content-scan-folder."""
+
+    folder: str = Field(
+        default="",
+        max_length=500,
+        description="Drive folder URL or ID (defaults to GOOGLE_DRIVE_CONTENT_FOLDER_ID)",
+    )
+    count: int | None = Field(default=None, ge=1, le=365)
+    time: str = Field(default="", max_length=16, description="HH:MM post time")
+    target: str = Field(default="", max_length=16, description="group | channel | both")
+    caption: str = Field(default="", max_length=2000)
+    start_date: str = Field(
+        default="",
+        max_length=16,
+        description="YYYY-MM-DD; default = day after last pending, or today",
+    )
+    caption_from_filename: bool | None = None
+
+
+@app.post("/admin/content-scan-folder")
+def scan_content_folder(
+    payload: ContentScanPayload = ContentScanPayload(),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Scan the shared Drive content folder and append pending ContentCalendar rows.
+
+    - One unused file → one day (sequential dates)
+    - Auto-detects type (image / video / audio / voice / document)
+    - Skips files already listed in the sheet
+    Auth: X-Webhook-Secret when WEBHOOK_SECRET is set.
+    """
+    _check_webhook_secret(x_webhook_secret)
+    settings = get_settings()
+    body = payload
+
+    result = FolderScanner(settings).scan_and_fill(
+        folder=(body.folder or "").strip() or None,
+        count=body.count,
+        post_time=(body.time or "").strip() or None,
+        target=(body.target or "").strip() or None,
+        caption=body.caption if body.caption else None,
+        start_date=(body.start_date or "").strip() or None,
+        caption_from_filename=body.caption_from_filename,
+    )
+    logger.info(
+        "Content folder scan ok=%s folder=%s created=%s detail=%s",
+        result.ok,
+        result.folder_id,
+        result.created,
+        result.detail,
+    )
+    if not result.ok:
+        raise HTTPException(status_code=400, detail=result.detail)
+    return {
+        "ok": True,
+        "folder_id": result.folder_id,
+        "scanned": result.scanned,
+        "skipped_used": result.skipped_used,
+        "skipped_unsupported": result.skipped_unsupported,
+        "created": result.created,
+        "detail": result.detail,
+        "rows": [
+            {
+                "row": r.get("_row"),
+                "date": r.get("date"),
+                "time": r.get("time"),
+                "type": r.get("type"),
+                "file_url": r.get("file_url"),
+                "caption": r.get("caption"),
+                "status": r.get("status"),
+            }
+            for r in result.rows
+        ],
+    }
 
 
 @app.post("/cron/content-posts")

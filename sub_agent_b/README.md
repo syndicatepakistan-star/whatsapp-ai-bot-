@@ -33,6 +33,8 @@ Mark status = posted  (or failed + notes)
 | `poster.py` | Main Agent B logic (due rows → send → update sheet) |
 | `content_sheets.py` | Read/update `ContentCalendar` tab |
 | `media_resolve.py` | Download Drive / TikTok / social / direct URLs → real file |
+| `folder_scan.py` | Scan Drive folder → auto-create pending calendar rows |
+| `scan_folder.py` | CLI: run folder scan locally |
 | `media_whapi.py` | Whapi send (URL or multipart file) + list channels |
 | `run_once.py` | Run one tick locally |
 | `list_channels.py` | Fetch `@newsletter` channel IDs |
@@ -75,6 +77,11 @@ The bot **creates the tab + headers** on first run if missing (same spreadsheet 
 | `CONTENT_TIMEZONE` | Default `Asia/Karachi` |
 | `CONTENT_POSTER_DELAY_SECONDS` | Pause between posts |
 | `GOOGLE_DRIVE_CONTENT_FOLDER_ID` | Optional: only allow files in this Drive folder |
+| `CONTENT_SCAN_DEFAULT_COUNT` | Max rows per scan (default 30) |
+| `CONTENT_SCAN_DEFAULT_TIME` | Time for auto rows (default `12:00`) |
+| `CONTENT_SCAN_DEFAULT_TARGET` | `both` / `group` / `channel` |
+| `CONTENT_SCAN_DEFAULT_CAPTION` | Optional fixed caption for all scanned rows |
+| `CONTENT_SCAN_CAPTION_FROM_FILENAME` | `true` = use filename as caption when empty |
 
 ## Local file paths (PC only)
 
@@ -110,8 +117,39 @@ GOOGLE_DRIVE_CONTENT_FOLDER_ID=FOLDER_ID
 Daily use:
 
 1. Drop the mp4/image into that folder (no per-file share).
-2. Right-click file → **Copy link** → paste into sheet `file_url`.
-3. Set `status=pending` — Railway cron or local `run_once` will download via Drive API and post.
+2. Either:
+   - **Auto (recommended):** run a folder scan (below) — fills ~30 pending rows, or
+   - Manual: right-click file → **Copy link** → paste into sheet `file_url`, set `type` + `status=pending`
+3. Railway cron or local `run_once` will download via Drive API and post.
+
+### Auto-fill sheet from folder (scan)
+
+Name files in order (`001.mp4`, `002.jpg`, …). Then:
+
+**Local:**
+
+```powershell
+.\.venv\Scripts\python.exe -m sub_agent_b.scan_folder
+.\.venv\Scripts\python.exe -m sub_agent_b.scan_folder --count 30 --time 12:00 --target both
+```
+
+**On Railway / live bot:**
+
+```http
+POST /admin/content-scan-folder
+X-Webhook-Secret: YOUR_SECRET
+Content-Type: application/json
+
+{"count": 30, "time": "12:00", "target": "both"}
+```
+
+What the scan does:
+
+- Lists files in `GOOGLE_DRIVE_CONTENT_FOLDER_ID`
+- Skips files already in the sheet
+- Auto-sets `type` from MIME/extension
+- Creates one pending row per day (starts after your last pending date, or today)
+- Caption = filename (unless you set a fixed caption)
 
 If `GOOGLE_DRIVE_CONTENT_FOLDER_ID` is set, files outside that folder are rejected.
 
