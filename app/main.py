@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.booking_workflow import BookingWorkflow
 from app.config import get_settings
+from app.sheets import GoogleSheetsClient
 from app.whatsapp import WhatsAppClient
 from app.workflow import LeadWorkflow
 from sub_agent_b.folder_scan import FolderScanner
@@ -36,6 +37,16 @@ class LeadPayload(BaseModel):
     diagnosis: str = Field(default="Not Completed", max_length=32)
     # True = only update diagnosis on Leads sheet (no WhatsApp / group add).
     sheet_only: bool = False
+
+
+class DiagnosisBackfillItem(BaseModel):
+    email: str = Field(default="", max_length=320)
+    phone: str = Field(default="", max_length=40)
+    diagnosis: str = Field(default="Not Completed", max_length=32)
+
+
+class DiagnosisBackfillPayload(BaseModel):
+    items: list[DiagnosisBackfillItem] = Field(default_factory=list)
 
 
 class BookingPayload(BaseModel):
@@ -139,6 +150,34 @@ def receive_lead(
         "group_add_detail": result.group_add_detail,
         "diagnosis": result.diagnosis,
     }
+
+
+@app.post("/webhook/leads/backfill-diagnosis")
+def backfill_diagnosis(
+    payload: DiagnosisBackfillPayload,
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Batch-update diagnosis on existing Leads rows (one sheet read + batched writes).
+    Used by Django manage.py backfill_lead_diagnosis --batch.
+    """
+    _check_webhook_secret(x_webhook_secret)
+    settings = get_settings()
+    items = [
+        {
+            "email": item.email,
+            "phone": item.phone,
+            "diagnosis": item.diagnosis,
+        }
+        for item in (payload.items or [])
+    ]
+    if not items:
+        raise HTTPException(status_code=400, detail="items is required")
+
+    logger.info("Diagnosis batch backfill items=%s", len(items))
+    sheets = GoogleSheetsClient(settings)
+    result = sheets.batch_update_diagnoses(items)
+    return {"ok": True, **result}
 
 
 @app.post("/webhook/booking")

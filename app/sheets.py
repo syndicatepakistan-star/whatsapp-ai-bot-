@@ -308,6 +308,112 @@ class GoogleSheetsClient:
             )
         return True
 
+    def batch_update_diagnoses(
+        self,
+        items: list[dict],
+    ) -> dict:
+        """
+        Apply many diagnosis updates with ONE sheet read + batched cell writes.
+
+        Each item: {email?, phone?, diagnosis}
+        Returns {updated, skipped, rows_touched, skipped_items:[{email,phone,diagnosis}]}
+        """
+        worksheet = self._get_worksheet()
+        rows = self.list_lead_rows()
+        header = [h.strip().lower() for h in (worksheet.row_values(1) or [])]
+        try:
+            diagnosis_col = header.index("diagnosis") + 1
+        except ValueError:
+            start_col = len(header) + 1
+            worksheet.update(
+                f"R1C{start_col}:R1C{start_col}",
+                [["diagnosis"]],
+                value_input_option="USER_ENTERED",
+            )
+            diagnosis_col = start_col
+            header = [h.strip().lower() for h in (worksheet.row_values(1) or [])]
+
+        # Index sheet rows for fast lookup.
+        by_email: dict[str, list[dict]] = {}
+        for row in rows:
+            em = (row.get("email") or "").strip().lower().replace(" ", "")
+            if em:
+                by_email.setdefault(em, []).append(row)
+
+        updated = 0
+        skipped = 0
+        rows_touched = 0
+        skipped_items: list[dict] = []
+        # Collect (row_number, value) then write in chunks.
+        writes: list[tuple[int, str]] = []
+
+        for raw in items:
+            if not isinstance(raw, dict):
+                skipped += 1
+                continue
+            diagnosis_norm = (raw.get("diagnosis") or "").strip()
+            if diagnosis_norm.lower() == "completed":
+                diagnosis_norm = "Completed"
+            elif diagnosis_norm:
+                diagnosis_norm = "Not Completed"
+            else:
+                skipped += 1
+                continue
+
+            email_norm = (raw.get("email") or "").strip().lower().replace(" ", "")
+            phone_norm = (raw.get("phone") or "").strip()
+            matches: list[dict] = []
+            if email_norm and email_norm in by_email:
+                matches.extend(by_email[email_norm])
+            if phone_norm:
+                for row in rows:
+                    row_phone = (row.get("phone") or "").strip()
+                    if row_phone and _phones_match(row_phone, phone_norm):
+                        if row not in matches:
+                            matches.append(row)
+
+            if not matches:
+                skipped += 1
+                skipped_items.append(
+                    {
+                        "email": email_norm,
+                        "phone": phone_norm,
+                        "diagnosis": diagnosis_norm,
+                    }
+                )
+                continue
+
+            updated += 1
+            for match in matches:
+                writes.append((int(match["_row"]), diagnosis_norm))
+                rows_touched += 1
+
+        # Batch write (Google Sheets API) — chunks of 100 cells.
+        for i in range(0, len(writes), 100):
+            chunk = writes[i : i + 100]
+            data = [
+                {
+                    "range": f"R{row_num}C{diagnosis_col}",
+                    "values": [[value]],
+                }
+                for row_num, value in chunk
+            ]
+            if data:
+                worksheet.batch_update(data, value_input_option="USER_ENTERED")
+
+        logger.info(
+            "Batch diagnosis done updated_users=%s skipped_users=%s rows_touched=%s",
+            updated,
+            skipped,
+            rows_touched,
+        )
+        return {
+            "updated": updated,
+            "skipped": skipped,
+            "rows_touched": rows_touched,
+            "skipped_items": skipped_items[:50],  # cap response size
+        }
+
     def list_lead_rows(self) -> list[dict]:
         """Return lead rows as dicts with 1-based `_row` index."""
         worksheet = self._get_worksheet()
