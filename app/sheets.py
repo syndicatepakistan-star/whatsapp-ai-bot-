@@ -72,6 +72,20 @@ def _digits_only(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())
 
 
+def _normalize_phone_digits(raw: str) -> str:
+    """Digits only, with common trunk-zero fixes (+44 07… → 447…)."""
+    digits = _digits_only(raw)
+    if not digits:
+        return ""
+    # UK national format stored as +44 0xxxxxxxxxx
+    if digits.startswith("44") and len(digits) >= 12 and digits[2] == "0":
+        digits = "44" + digits[3:]
+    # North America sometimes stored with leading 0 after country code
+    if digits.startswith("1") and len(digits) >= 12 and digits[1] == "0":
+        digits = "1" + digits[2:]
+    return digits
+
+
 def _phones_match(a: str, b: str) -> bool:
     """Loose match: exact, strip +, or last 10 digits (ignores #ERROR! / formulas)."""
     left = (a or "").strip()
@@ -86,13 +100,13 @@ def _phones_match(a: str, b: str) -> bool:
         return True
     if left.replace("+", "").replace(" ", "") == right.replace("+", "").replace(" ", ""):
         return True
-    ld = _digits_only(left)
-    rd = _digits_only(right)
+    ld = _normalize_phone_digits(left)
+    rd = _normalize_phone_digits(right)
     if not ld or not rd:
         return False
     if ld == rd:
         return True
-    # Compare national significant number (last 10 digits) — handles +44 0… vs +44…
+    # Compare national significant number (last 10 digits)
     return len(ld) >= 10 and len(rd) >= 10 and ld[-10:] == rd[-10:]
 
 

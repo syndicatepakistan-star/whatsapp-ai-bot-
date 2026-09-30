@@ -128,7 +128,8 @@ def receive_lead(
     )
 
     return {
-        "ok": True,
+        "ok": result.action != "sheet_diagnosis_skipped",
+        "sheet_updated": result.action == "sheet_diagnosis_updated",
         "action": result.action,
         "status": result.status,
         "phone_e164": result.phone_e164,
