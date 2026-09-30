@@ -33,6 +33,7 @@ class LeadPayload(BaseModel):
     phone: str = Field(default="", max_length=40)
     source: str = Field(default="", max_length=100)
     intake_url: str = Field(default="", max_length=500)
+    diagnosis: str = Field(default="Not Completed", max_length=32)
 
 
 class BookingPayload(BaseModel):
@@ -95,11 +96,12 @@ def receive_lead(
         raise HTTPException(status_code=400, detail="phone is required")
 
     logger.info(
-        "Lead received name=%s email=%s phone=%s source=%s intake_url=%s",
+        "Lead received name=%s email=%s phone=%s source=%s diagnosis=%s intake_url=%s",
         payload.name,
         payload.email,
         payload.phone,
         payload.source or "unknown",
+        payload.diagnosis or "Not Completed",
         (payload.intake_url or "")[:120],
     )
 
@@ -109,6 +111,7 @@ def receive_lead(
         email=payload.email,
         phone=payload.phone,
         intake_url=payload.intake_url,
+        diagnosis=payload.diagnosis or "Not Completed",
     )
 
     return {
@@ -120,6 +123,7 @@ def receive_lead(
         "detail": result.detail,
         "group_add_status": result.group_add_status,
         "group_add_detail": result.group_add_detail,
+        "diagnosis": result.diagnosis,
     }
 
 

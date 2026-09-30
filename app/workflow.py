@@ -16,6 +16,14 @@ STATUS_WRONG_NUMBER = "wrong number"
 STATUS_MANUAL_NEEDED = "manual follow-up needed"
 STATUS_WHATSAPP_SENT = "whatsapp message sent"
 STATUS_WHATSAPP_SEND_FAILED = "whatsapp send failed"
+STATUS_DIAGNOSIS_UPDATED = "diagnosis updated"
+
+
+def _normalize_diagnosis(raw: str) -> str:
+    value = (raw or "").strip()
+    if value.lower() == "completed":
+        return "Completed"
+    return "Not Completed"
 
 
 @dataclass
@@ -27,6 +35,7 @@ class LeadResult:
     intake_url: str = ""
     group_add_status: str = ""
     group_add_detail: str = ""
+    diagnosis: str = "Not Completed"
 
 
 def build_intake_url(*, email: str, intake_url: str, intake_base_url: str) -> str:
@@ -57,15 +66,40 @@ class LeadWorkflow:
         email: str,
         phone: str,
         intake_url: str = "",
+        diagnosis: str = "Not Completed",
     ) -> LeadResult:
         name = (name or "").strip()
         email = (email or "").strip().lower()
         phone = (phone or "").strip()
+        diagnosis_norm = _normalize_diagnosis(diagnosis)
         resolved_intake_url = build_intake_url(
             email=email,
             intake_url=intake_url,
             intake_base_url=self.settings.intake_base_url,
         )
+
+        # Quiz finished later: only flip diagnosis on existing Leads row — do not re-message.
+        if diagnosis_norm == "Completed":
+            updated = False
+            try:
+                updated = self.sheets.update_lead_diagnosis(
+                    email=email,
+                    phone=phone,
+                    diagnosis=diagnosis_norm,
+                )
+            except Exception:
+                logger.exception("Failed to update diagnosis on sheet email=%s", email)
+
+            if updated:
+                return LeadResult(
+                    action="sheet_diagnosis_updated",
+                    status=STATUS_DIAGNOSIS_UPDATED,
+                    phone_e164=phone,
+                    detail="diagnosis set to Completed on existing lead row",
+                    intake_url=resolved_intake_url,
+                    diagnosis=diagnosis_norm,
+                )
+            # No existing row — fall through and create a normal lead row with Completed.
 
         phone_check = validate_phone(phone, self.settings.default_phone_region)
         if not phone_check.is_valid:
@@ -75,12 +109,18 @@ class LeadWorkflow:
                 phone=phone,
                 status=STATUS_WRONG_NUMBER,
                 notes=phone_check.reason,
+                group_add_status="skipped",
+                group_add_detail="wrong_number",
+                diagnosis=diagnosis_norm,
             )
             return LeadResult(
                 action="sheet_wrong_number",
                 status=STATUS_WRONG_NUMBER,
                 detail=phone_check.reason,
                 intake_url=resolved_intake_url,
+                group_add_status="skipped",
+                group_add_detail="wrong_number",
+                diagnosis=diagnosis_norm,
             )
 
         e164 = phone_check.e164
@@ -96,6 +136,9 @@ class LeadWorkflow:
                     f"Detail: {wa_check.detail}. Text them manually."
                     + (f" Intake: {resolved_intake_url}" if resolved_intake_url else "")
                 ),
+                group_add_status="skipped",
+                group_add_detail="not_on_whatsapp",
+                diagnosis=diagnosis_norm,
             )
             return LeadResult(
                 action="sheet_manual_followup",
@@ -103,6 +146,9 @@ class LeadWorkflow:
                 phone_e164=e164,
                 detail=wa_check.detail,
                 intake_url=resolved_intake_url,
+                group_add_status="skipped",
+                group_add_detail="not_on_whatsapp",
+                diagnosis=diagnosis_norm,
             )
 
         send = self.whatsapp.send_text(
@@ -118,6 +164,9 @@ class LeadWorkflow:
                 phone=e164,
                 status=STATUS_WHATSAPP_SEND_FAILED,
                 notes=send.detail,
+                group_add_status="skipped",
+                group_add_detail="whatsapp_send_failed",
+                diagnosis=diagnosis_norm,
             )
             return LeadResult(
                 action="sheet_send_failed",
@@ -125,6 +174,9 @@ class LeadWorkflow:
                 phone_e164=e164,
                 detail=send.detail,
                 intake_url=resolved_intake_url,
+                group_add_status="skipped",
+                group_add_detail="whatsapp_send_failed",
+                diagnosis=diagnosis_norm,
             )
 
         # Sub-agent A: direct-add to WhatsApp group (invite fallback if blocked).
@@ -148,6 +200,7 @@ class LeadWorkflow:
             + (f" | {resolved_intake_url}" if resolved_intake_url else ""),
             group_add_status=group_status,
             group_add_detail=group_detail,
+            diagnosis=diagnosis_norm,
         )
         return LeadResult(
             action="whatsapp_sent",
@@ -157,6 +210,7 @@ class LeadWorkflow:
             intake_url=resolved_intake_url,
             group_add_status=group_status,
             group_add_detail=group_detail,
+            diagnosis=diagnosis_norm,
         )
 
     def _safe_sheet(
@@ -169,6 +223,7 @@ class LeadWorkflow:
         notes: str = "",
         group_add_status: str = "",
         group_add_detail: str = "",
+        diagnosis: str = "Not Completed",
     ) -> None:
         try:
             self.sheets.append_lead(
@@ -179,6 +234,7 @@ class LeadWorkflow:
                 notes=notes,
                 group_add_status=group_add_status,
                 group_add_detail=group_add_detail,
+                diagnosis=diagnosis,
             )
         except Exception:
             logger.exception("Failed to write Google Sheet status=%s", status)

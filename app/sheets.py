@@ -27,7 +27,15 @@ HEADERS = [
     "notes",
     "group_add_status",
     "group_add_detail",
+    "diagnosis",
 ]
+
+# Older sheets used group_add_dated — treat as alias of group_add_detail.
+_HEADER_ALIASES = {
+    "group_add_dated": "group_add_detail",
+    "group_add_date": "group_add_detail",
+    "group_add_notes": "group_add_detail",
+}
 
 BOOKING_HEADERS = [
     "timestamp",
@@ -114,7 +122,12 @@ class GoogleSheetsClient:
         else:
             # Ensure newer Agent A columns exist on older sheets.
             lowered = [h.strip().lower() for h in existing]
-            missing = [h for h in HEADERS if h.lower() not in lowered]
+            # Treat legacy aliases as already present (e.g. group_add_dated ≈ group_add_detail).
+            covered = set(lowered)
+            for alias, canonical in _HEADER_ALIASES.items():
+                if alias in covered:
+                    covered.add(canonical)
+            missing = [h for h in HEADERS if h.lower() not in covered]
             if missing:
                 start_col = len(existing) + 1
                 end_col = start_col + len(missing) - 1
@@ -160,6 +173,7 @@ class GoogleSheetsClient:
         notes: str = "",
         group_add_status: str = "",
         group_add_detail: str = "",
+        diagnosis: str = "",
     ) -> None:
         worksheet = self._get_worksheet()
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -174,18 +188,88 @@ class GoogleSheetsClient:
             "notes": notes,
             "group_add_status": group_add_status,
             "group_add_detail": group_add_detail,
+            "diagnosis": diagnosis,
         }
+        # Support legacy header names (e.g. group_add_dated → group_add_detail).
+        for alias, canonical in _HEADER_ALIASES.items():
+            if alias in header and canonical in values_by_key:
+                values_by_key[alias] = values_by_key[canonical]
+
         row = [values_by_key.get(h, "") for h in header]
         # If sheet somehow has no recognized headers, fall back to full HEADERS order.
         if not any(header):
-            row = [values_by_key[h] for h in HEADERS]
+            row = [values_by_key.get(h, "") for h in HEADERS]
         worksheet.append_row(row, value_input_option="USER_ENTERED")
         logger.info(
-            "Sheet row added status=%s group_add=%s phone=%s",
+            "Sheet row added status=%s group_add=%s detail=%s diagnosis=%s phone=%s",
             status,
             group_add_status or "-",
+            (group_add_detail or "-")[:80],
+            diagnosis or "-",
             phone,
         )
+
+    def update_lead_diagnosis(
+        self,
+        *,
+        email: str = "",
+        phone: str = "",
+        diagnosis: str,
+    ) -> bool:
+        """
+        Update diagnosis on the newest matching lead row (by email, then phone).
+        Returns True if a row was updated.
+        """
+        diagnosis_norm = (diagnosis or "").strip()
+        if not diagnosis_norm:
+            return False
+
+        email_norm = (email or "").strip().lower()
+        phone_norm = (phone or "").strip()
+        if not email_norm and not phone_norm:
+            return False
+
+        rows = self.list_lead_rows()
+        match = None
+        for row in reversed(rows):
+            row_email = (row.get("email") or "").strip().lower()
+            row_phone = (row.get("phone") or "").strip()
+            if email_norm and row_email == email_norm:
+                match = row
+                break
+            if phone_norm and row_phone and (
+                row_phone == phone_norm
+                or row_phone.replace("+", "") == phone_norm.replace("+", "")
+            ):
+                match = row
+                break
+
+        if not match:
+            return False
+
+        worksheet = self._get_worksheet()
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+        try:
+            diagnosis_col = header.index("diagnosis") + 1
+        except ValueError:
+            # Header missing — append it, then write.
+            start_col = len(header) + 1
+            worksheet.update(
+                f"R1C{start_col}:R1C{start_col}",
+                [["diagnosis"]],
+                value_input_option="USER_ENTERED",
+            )
+            diagnosis_col = start_col
+
+        worksheet.update_cell(int(match["_row"]), diagnosis_col, diagnosis_norm)
+        logger.info(
+            "Sheet diagnosis updated row=%s diagnosis=%s email=%s phone=%s",
+            match["_row"],
+            diagnosis_norm,
+            email_norm or "-",
+            phone_norm or "-",
+        )
+        return True
 
     def list_lead_rows(self) -> list[dict]:
         """Return lead rows as dicts with 1-based `_row` index."""
@@ -211,14 +295,23 @@ class GoogleSheetsClient:
     ) -> None:
         worksheet = self._get_worksheet()
         header = [h.strip().lower() for h in worksheet.row_values(1)]
-        try:
-            status_col = header.index("group_add_status") + 1
-        except ValueError:
-            status_col = 7
-        try:
-            detail_col = header.index("group_add_detail") + 1
-        except ValueError:
-            detail_col = 8
+
+        def _col(*names: str, default: int) -> int:
+            for name in names:
+                try:
+                    return header.index(name) + 1
+                except ValueError:
+                    continue
+            return default
+
+        status_col = _col("group_add_status", default=7)
+        detail_col = _col(
+            "group_add_detail",
+            "group_add_dated",
+            "group_add_date",
+            "group_add_notes",
+            default=8,
+        )
         worksheet.update_cell(row_number, status_col, group_add_status)
         worksheet.update_cell(row_number, detail_col, group_add_detail)
 
