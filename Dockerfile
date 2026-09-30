@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY sub_agent_b ./sub_agent_b
+COPY scripts ./scripts
 COPY start.py ./start.py
 
 ENV PORT=8080
