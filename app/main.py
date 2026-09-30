@@ -94,8 +94,17 @@ def receive_lead(
     _check_webhook_secret(x_webhook_secret)
     settings = get_settings()
 
-    if not (payload.phone or "").strip():
+    if not (payload.phone or "").strip() and not bool(payload.sheet_only):
         raise HTTPException(status_code=400, detail="phone is required")
+    if (
+        bool(payload.sheet_only)
+        and not (payload.phone or "").strip()
+        and not (payload.email or "").strip()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="phone or email is required when sheet_only=true",
+        )
 
     logger.info(
         "Lead received name=%s email=%s phone=%s source=%s diagnosis=%s sheet_only=%s intake_url=%s",

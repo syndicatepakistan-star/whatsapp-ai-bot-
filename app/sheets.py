@@ -68,6 +68,34 @@ def normalize_sheet_id(raw: str) -> str:
     return text
 
 
+def _digits_only(raw: str) -> str:
+    return "".join(ch for ch in (raw or "") if ch.isdigit())
+
+
+def _phones_match(a: str, b: str) -> bool:
+    """Loose match: exact, strip +, or last 10 digits (ignores #ERROR! / formulas)."""
+    left = (a or "").strip()
+    right = (b or "").strip()
+    if not left or not right:
+        return False
+    if left.upper() in {"#ERROR!", "#N/A", "#VALUE!", "#REF!"}:
+        return False
+    if right.upper() in {"#ERROR!", "#N/A", "#VALUE!", "#REF!"}:
+        return False
+    if left == right:
+        return True
+    if left.replace("+", "").replace(" ", "") == right.replace("+", "").replace(" ", ""):
+        return True
+    ld = _digits_only(left)
+    rd = _digits_only(right)
+    if not ld or not rd:
+        return False
+    if ld == rd:
+        return True
+    # Compare national significant number (last 10 digits) — handles +44 0… vs +44…
+    return len(ld) >= 10 and len(rd) >= 10 and ld[-10:] == rd[-10:]
+
+
 class GoogleSheetsClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -217,8 +245,8 @@ class GoogleSheetsClient:
         diagnosis: str,
     ) -> bool:
         """
-        Update diagnosis on the newest matching lead row (by email, then phone).
-        Returns True if a row was updated.
+        Update diagnosis on ALL matching lead rows (by email and/or loose phone).
+        Returns True if at least one row was updated.
         """
         diagnosis_norm = (diagnosis or "").strip()
         if not diagnosis_norm:
@@ -230,21 +258,16 @@ class GoogleSheetsClient:
             return False
 
         rows = self.list_lead_rows()
-        match = None
-        for row in reversed(rows):
+        matches: list[dict] = []
+        for row in rows:
             row_email = (row.get("email") or "").strip().lower()
             row_phone = (row.get("phone") or "").strip()
-            if email_norm and row_email == email_norm:
-                match = row
-                break
-            if phone_norm and row_phone and (
-                row_phone == phone_norm
-                or row_phone.replace("+", "") == phone_norm.replace("+", "")
-            ):
-                match = row
-                break
+            email_hit = bool(email_norm and row_email and row_email == email_norm)
+            phone_hit = bool(phone_norm and row_phone and _phones_match(row_phone, phone_norm))
+            if email_hit or phone_hit:
+                matches.append(row)
 
-        if not match:
+        if not matches:
             return False
 
         worksheet = self._get_worksheet()
@@ -252,7 +275,6 @@ class GoogleSheetsClient:
         try:
             diagnosis_col = header.index("diagnosis") + 1
         except ValueError:
-            # Header missing — append it, then write.
             start_col = len(header) + 1
             worksheet.update(
                 f"R1C{start_col}:R1C{start_col}",
@@ -261,14 +283,15 @@ class GoogleSheetsClient:
             )
             diagnosis_col = start_col
 
-        worksheet.update_cell(int(match["_row"]), diagnosis_col, diagnosis_norm)
-        logger.info(
-            "Sheet diagnosis updated row=%s diagnosis=%s email=%s phone=%s",
-            match["_row"],
-            diagnosis_norm,
-            email_norm or "-",
-            phone_norm or "-",
-        )
+        for match in matches:
+            worksheet.update_cell(int(match["_row"]), diagnosis_col, diagnosis_norm)
+            logger.info(
+                "Sheet diagnosis updated row=%s diagnosis=%s email=%s phone=%s",
+                match["_row"],
+                diagnosis_norm,
+                email_norm or "-",
+                phone_norm or "-",
+            )
         return True
 
     def list_lead_rows(self) -> list[dict]:
