@@ -198,6 +198,69 @@ class WhatsAppClient:
 
         return self._post_text(phone=phone, body=body)
 
+    def send_quiz_followup(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str = "",
+        intake_url: str = "",
+    ) -> WhatsAppSendResult:
+        """
+        Send quiz-incomplete follow-up (same link-then-text pattern as audit).
+        Template: WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT — {name} {email} {intake_url}
+        """
+        if not self._configured():
+            return WhatsAppSendResult(False, detail="whapi_not_configured")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppSendResult(False, detail="empty_phone")
+
+        display_name = (name or "there").strip() or "there"
+        display_email = (email or "").strip().lower()
+        display_url = (intake_url or "").strip()
+
+        template = self.settings.whapi_quiz_followup_message_text or (
+            "Hi {name},\n\nPlease complete Syn Diagnosis:\n{intake_url}\n\n"
+            "With Honour\nThe Syndicate"
+        )
+        template = template.replace("\\n", "\n")
+
+        body = (
+            template.replace("{name}", display_name)
+            .replace("{email}", display_email)
+            .replace("{intake_url}", display_url)
+        ).strip()
+
+        if self.settings.whapi_link_separate and display_url:
+            link_result = self._post_text(phone=phone, body=display_url)
+            if not link_result.ok:
+                return link_result
+
+            text_only = (
+                template.replace("{name}", display_name)
+                .replace("{email}", display_email)
+                .replace("{intake_url}", "")
+            ).strip()
+            while "\n\n\n" in text_only:
+                text_only = text_only.replace("\n\n\n", "\n\n")
+            text_only = text_only.strip()
+
+            text_result = self._post_text(phone=phone, body=text_only or body)
+            if not text_result.ok:
+                return text_result
+            return WhatsAppSendResult(
+                True,
+                detail="sent_link_then_text",
+                message_id=text_result.message_id or link_result.message_id,
+            )
+
+        if display_url and "{intake_url}" not in template and display_url not in body:
+            body = f"{body}\n\n{display_url}"
+
+        return self._post_text(phone=phone, body=body)
+
     def list_groups(self, *, count: int = 100, offset: int = 0) -> dict:
         """
         List WhatsApp groups for this Whapi channel.

@@ -93,6 +93,40 @@ def list_groups(
     return result
 
 
+class QuizFollowupPayload(BaseModel):
+    dry_run: bool = False
+    limit: int = Field(default=0, ge=0, le=500)
+    delay: float = Field(default=1.5, ge=0, le=30)
+    force: bool = False
+    include_manual_followup: bool = False
+    skip_whatsapp_check: bool = False
+
+
+@app.post("/admin/quiz-followup")
+def quiz_followup(
+    payload: QuizFollowupPayload = QuizFollowupPayload(),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    WhatsApp follow-up for Leads where diagnosis = Not Completed.
+    Same link-then-text pattern as audit booking. Auth: X-Webhook-Secret.
+    Prefer dry_run first. Or use: python scripts/message_not_completed.py --dry-run
+    """
+    _check_webhook_secret(x_webhook_secret)
+    from app.quiz_followup import QuizFollowupService
+
+    settings = get_settings()
+    result = QuizFollowupService(settings).run(
+        dry_run=bool(payload.dry_run),
+        limit=int(payload.limit or 0),
+        delay=float(payload.delay),
+        force=bool(payload.force),
+        include_manual_followup=bool(payload.include_manual_followup),
+        check_whatsapp=not bool(payload.skip_whatsapp_check),
+    )
+    return result.as_dict()
+
+
 @app.post("/webhook/lead")
 def receive_lead(
     payload: LeadPayload,

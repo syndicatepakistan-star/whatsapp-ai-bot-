@@ -28,6 +28,8 @@ HEADERS = [
     "group_add_status",
     "group_add_detail",
     "diagnosis",
+    "quiz_followup_status",
+    "quiz_followup_detail",
 ]
 
 # Older sheets used group_add_dated — treat as alias of group_add_detail.
@@ -502,6 +504,48 @@ class GoogleSheetsClient:
             item["_row"] = i
             rows.append(item)
         return rows
+
+    def ensure_lead_columns(self, *column_names: str) -> None:
+        """Append missing header names to row 1 (does not shift existing cells)."""
+        worksheet = self._get_worksheet()
+        header = [h.strip() for h in (worksheet.row_values(1) or [])]
+        header_lower = {h.strip().lower() for h in header if h.strip()}
+        to_add = [
+            name
+            for name in column_names
+            if name and name.strip().lower() not in header_lower
+        ]
+        if not to_add:
+            return
+        start_col = len(header) + 1
+        end_col = start_col + len(to_add) - 1
+        worksheet.update(
+            f"R1C{start_col}:R1C{end_col}",
+            [to_add],
+            value_input_option="USER_ENTERED",
+        )
+        logger.info("Added Leads headers: %s", ", ".join(to_add))
+
+    def update_lead_quiz_followup(
+        self,
+        row_number: int,
+        *,
+        status: str,
+        detail: str = "",
+    ) -> None:
+        self.ensure_lead_columns("quiz_followup_status", "quiz_followup_detail")
+        worksheet = self._get_worksheet()
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+
+        def _col(name: str) -> int:
+            return header.index(name) + 1
+
+        # Re-read after ensure (header may have grown).
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+        status_col = _col("quiz_followup_status")
+        detail_col = _col("quiz_followup_detail")
+        worksheet.update_cell(row_number, status_col, status)
+        worksheet.update_cell(row_number, detail_col, (detail or "")[:500])
 
     def update_lead_group_status(
         self,

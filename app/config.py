@@ -41,6 +41,19 @@ class Settings(BaseSettings):
     # true = send link first (rich preview card), then text without raw URL
     whapi_link_separate: bool = True
 
+    # Quiz incomplete follow-up (diagnosis = Not Completed).
+    # Placeholders: {name} {email} {intake_url}
+    # Set WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT in Railway when final copy is ready.
+    whapi_quiz_followup_message_text: str = (
+        "Hi {name},\n\n"
+        "You have not finished Syn Diagnosis yet.\n\n"
+        "Complete the quick form here and we will get you booked "
+        "for your founder audit:\n\n"
+        "{intake_url}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
+
     # Audit booking confirmation message.
     # Placeholders: {name} {email} {meet_link} {slot_local} {timezone}
     whapi_booking_message_text: str = (
