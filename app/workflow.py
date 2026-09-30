@@ -67,6 +67,7 @@ class LeadWorkflow:
         phone: str,
         intake_url: str = "",
         diagnosis: str = "Not Completed",
+        sheet_only: bool = False,
     ) -> LeadResult:
         name = (name or "").strip()
         email = (email or "").strip().lower()
@@ -78,8 +79,8 @@ class LeadWorkflow:
             intake_base_url=self.settings.intake_base_url,
         )
 
-        # Quiz finished later: only flip diagnosis on existing Leads row — do not re-message.
-        if diagnosis_norm == "Completed":
+        # Backfill / quiz-complete: only flip diagnosis on existing Leads row — no WhatsApp.
+        if sheet_only or diagnosis_norm == "Completed":
             updated = False
             try:
                 updated = self.sheets.update_lead_diagnosis(
@@ -95,11 +96,22 @@ class LeadWorkflow:
                     action="sheet_diagnosis_updated",
                     status=STATUS_DIAGNOSIS_UPDATED,
                     phone_e164=phone,
-                    detail="diagnosis set to Completed on existing lead row",
+                    detail=f"diagnosis set to {diagnosis_norm} on existing lead row",
                     intake_url=resolved_intake_url,
                     diagnosis=diagnosis_norm,
                 )
-            # No existing row — fall through and create a normal lead row with Completed.
+
+            # sheet_only backfill: do not create new rows / re-message.
+            if sheet_only:
+                return LeadResult(
+                    action="sheet_diagnosis_skipped",
+                    status=STATUS_DIAGNOSIS_UPDATED,
+                    phone_e164=phone,
+                    detail="no matching Leads row to update",
+                    intake_url=resolved_intake_url,
+                    diagnosis=diagnosis_norm,
+                )
+            # Completed but no row yet — fall through and create a normal lead row.
 
         phone_check = validate_phone(phone, self.settings.default_phone_region)
         if not phone_check.is_valid:

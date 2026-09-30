@@ -34,6 +34,8 @@ class LeadPayload(BaseModel):
     source: str = Field(default="", max_length=100)
     intake_url: str = Field(default="", max_length=500)
     diagnosis: str = Field(default="Not Completed", max_length=32)
+    # True = only update diagnosis on Leads sheet (no WhatsApp / group add).
+    sheet_only: bool = False
 
 
 class BookingPayload(BaseModel):
@@ -96,12 +98,13 @@ def receive_lead(
         raise HTTPException(status_code=400, detail="phone is required")
 
     logger.info(
-        "Lead received name=%s email=%s phone=%s source=%s diagnosis=%s intake_url=%s",
+        "Lead received name=%s email=%s phone=%s source=%s diagnosis=%s sheet_only=%s intake_url=%s",
         payload.name,
         payload.email,
         payload.phone,
         payload.source or "unknown",
         payload.diagnosis or "Not Completed",
+        payload.sheet_only,
         (payload.intake_url or "")[:120],
     )
 
@@ -112,6 +115,7 @@ def receive_lead(
         phone=payload.phone,
         intake_url=payload.intake_url,
         diagnosis=payload.diagnosis or "Not Completed",
+        sheet_only=bool(payload.sheet_only),
     )
 
     return {
