@@ -68,8 +68,49 @@ def normalize_sheet_id(raw: str) -> str:
     return text
 
 
+_EMAIL_RE = re.compile(
+    r"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}",
+    re.IGNORECASE,
+)
+_EMAIL_QUERY_RE = re.compile(
+    r"(?:email|e)=([A-Z0-9._%+\-]+(?:%40|@)[A-Z0-9.\-]+\.[A-Z]{2,})",
+    re.IGNORECASE,
+)
+
+
 def _digits_only(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())
+
+
+def _normalize_email(raw: str) -> str:
+    return (raw or "").strip().lower().replace(" ", "").replace("%40", "@")
+
+
+def _emails_from_text(raw: str) -> set[str]:
+    """Collect emails from free text / intake URLs (including email=%40 encoding)."""
+    text = (raw or "").strip()
+    if not text:
+        return set()
+    found: set[str] = set()
+    for match in _EMAIL_QUERY_RE.findall(text):
+        normalized = _normalize_email(match)
+        if normalized:
+            found.add(normalized)
+    for match in _EMAIL_RE.findall(text.replace("%40", "@")):
+        normalized = _normalize_email(match)
+        if normalized:
+            found.add(normalized)
+    return found
+
+
+def _row_emails(row: dict) -> set[str]:
+    """Emails for a sheet row: email column + any emails embedded in notes."""
+    emails = set()
+    primary = _normalize_email(row.get("email") or "")
+    if primary:
+        emails.add(primary)
+    emails |= _emails_from_text(row.get("notes") or "")
+    return emails
 
 
 def _normalize_phone_digits(raw: str) -> str:
@@ -108,6 +149,54 @@ def _phones_match(a: str, b: str) -> bool:
         return True
     # Compare national significant number (last 10 digits)
     return len(ld) >= 10 and len(rd) >= 10 and ld[-10:] == rd[-10:]
+
+
+def _find_diagnosis_matches(
+    rows: list[dict],
+    *,
+    email: str = "",
+    phone: str = "",
+) -> list[dict]:
+    """
+    Match Leads rows for diagnosis updates.
+
+    Priority:
+      1) Email (sheet email column OR email inside notes/intake URL)
+      2) Phone only when the row has no conflicting different email
+    """
+    email_norm = _normalize_email(email)
+    phone_norm = (phone or "").strip()
+    if not email_norm and not phone_norm:
+        return []
+
+    matches: list[dict] = []
+    seen_rows: set[int] = set()
+
+    if email_norm:
+        for row in rows:
+            row_id = int(row.get("_row") or 0)
+            if row_id in seen_rows:
+                continue
+            if email_norm in _row_emails(row):
+                matches.append(row)
+                seen_rows.add(row_id)
+
+    if phone_norm:
+        for row in rows:
+            row_id = int(row.get("_row") or 0)
+            if row_id in seen_rows:
+                continue
+            row_phone = (row.get("phone") or "").strip()
+            if not (row_phone and _phones_match(row_phone, phone_norm)):
+                continue
+            row_emails = _row_emails(row)
+            # Do not stamp diagnosis onto another person's row via loose phone match.
+            if email_norm and row_emails and email_norm not in row_emails:
+                continue
+            matches.append(row)
+            seen_rows.add(row_id)
+
+    return matches
 
 
 class GoogleSheetsClient:
@@ -259,28 +348,24 @@ class GoogleSheetsClient:
         diagnosis: str,
     ) -> bool:
         """
-        Update diagnosis on ALL matching lead rows (by email and/or loose phone).
+        Update diagnosis on ALL matching lead rows.
+        Email (column or notes/intake URL) wins; phone is fallback only.
         Returns True if at least one row was updated.
         """
         diagnosis_norm = (diagnosis or "").strip()
         if not diagnosis_norm:
             return False
 
-        email_norm = (email or "").strip().lower()
+        email_norm = _normalize_email(email)
         phone_norm = (phone or "").strip()
         if not email_norm and not phone_norm:
             return False
 
-        rows = self.list_lead_rows()
-        matches: list[dict] = []
-        for row in rows:
-            row_email = (row.get("email") or "").strip().lower()
-            row_phone = (row.get("phone") or "").strip()
-            email_hit = bool(email_norm and row_email and row_email == email_norm)
-            phone_hit = bool(phone_norm and row_phone and _phones_match(row_phone, phone_norm))
-            if email_hit or phone_hit:
-                matches.append(row)
-
+        matches = _find_diagnosis_matches(
+            self.list_lead_rows(),
+            email=email_norm,
+            phone=phone_norm,
+        )
         if not matches:
             return False
 
@@ -333,13 +418,6 @@ class GoogleSheetsClient:
             diagnosis_col = start_col
             header = [h.strip().lower() for h in (worksheet.row_values(1) or [])]
 
-        # Index sheet rows for fast lookup.
-        by_email: dict[str, list[dict]] = {}
-        for row in rows:
-            em = (row.get("email") or "").strip().lower().replace(" ", "")
-            if em:
-                by_email.setdefault(em, []).append(row)
-
         updated = 0
         skipped = 0
         rows_touched = 0
@@ -360,17 +438,13 @@ class GoogleSheetsClient:
                 skipped += 1
                 continue
 
-            email_norm = (raw.get("email") or "").strip().lower().replace(" ", "")
+            email_norm = _normalize_email(raw.get("email") or "")
             phone_norm = (raw.get("phone") or "").strip()
-            matches: list[dict] = []
-            if email_norm and email_norm in by_email:
-                matches.extend(by_email[email_norm])
-            if phone_norm:
-                for row in rows:
-                    row_phone = (row.get("phone") or "").strip()
-                    if row_phone and _phones_match(row_phone, phone_norm):
-                        if row not in matches:
-                            matches.append(row)
+            matches = _find_diagnosis_matches(
+                rows,
+                email=email_norm,
+                phone=phone_norm,
+            )
 
             if not matches:
                 skipped += 1
