@@ -27,8 +27,17 @@ SKIP_STATUSES = {
 ALREADY_FOLLOWED_UP = {
     "sent",
     "sent_link_then_text",
-    "skipped",
     "failed",
+}
+
+# Permanent skips — do not retry. invalid_phone is retried after validator fixes.
+PERMANENT_SKIP_DETAILS = {
+    "wrong_number",
+    "bad_phone",
+    "manual_followup_needed",
+    "not_on_whatsapp",
+    "completed_before_followup",
+    "no_intake_url",
 }
 
 # Only these lead statuses are eligible for the 10-min incomplete quiz nudge.
@@ -166,6 +175,21 @@ class QuizFollowupService:
                 result.details.append(label)
                 continue
 
+            followup_detail = (row.get("quiz_followup_detail") or "").strip().lower()
+            if (
+                followup_status == "skipped"
+                and not force
+                and (
+                    followup_detail in PERMANENT_SKIP_DETAILS
+                    or any(followup_detail.startswith(p) for p in ("not_on_whatsapp", "wrong_number"))
+                )
+            ):
+                result.skipped += 1
+                label["action"] = "skip_already_done"
+                label["detail"] = followup_detail or "skipped"
+                result.details.append(label)
+                continue
+
             # Age gate: wait N minutes after sheet timestamp before nudging.
             if min_age > 0:
                 captured_at = _parse_lead_timestamp(row.get("timestamp") or "")
@@ -243,12 +267,8 @@ class QuizFollowupService:
                 result.skipped += 1
                 label["action"] = "skip_invalid_phone"
                 label["detail"] = phone_check.reason
-                if not dry_run:
-                    self.sheets.update_lead_quiz_followup(
-                        row_number,
-                        status="skipped",
-                        detail=f"invalid_phone:{phone_check.reason}",
-                    )
+                # Do not permanently mark skipped — sheet may strip '+' and next
+                # deploy / retry should succeed after phone_validator fix.
                 result.details.append(label)
                 processed += 1
                 continue
