@@ -220,6 +220,21 @@ class GoogleSheetsClient:
             )
         return Credentials.from_service_account_file(str(creds_path), scopes=SCOPES)
 
+    def _expand_worksheet_cols(self, worksheet, min_cols: int) -> None:
+        """Google Sheets rejects writes past the current grid; grow columns first."""
+        needed = max(1, int(min_cols))
+        current = int(getattr(worksheet, "col_count", 0) or 0)
+        if current >= needed:
+            return
+        rows = max(int(getattr(worksheet, "row_count", 0) or 0), 1)
+        worksheet.resize(rows=rows, cols=needed)
+        logger.info(
+            "Expanded sheet %r grid cols %s → %s",
+            getattr(worksheet, "title", "?"),
+            current,
+            needed,
+        )
+
     def _get_worksheet(self):
         if self._worksheet is not None:
             return self._worksheet
@@ -246,11 +261,12 @@ class GoogleSheetsClient:
             worksheet = spreadsheet.add_worksheet(
                 title=self.settings.google_sheet_worksheet,
                 rows=1000,
-                cols=len(HEADERS),
+                cols=max(len(HEADERS) + 4, 16),
             )
 
         existing = worksheet.row_values(1)
         if not existing:
+            self._expand_worksheet_cols(worksheet, len(HEADERS))
             worksheet.append_row(HEADERS, value_input_option="USER_ENTERED")
         else:
             # Ensure newer Agent A columns exist on older sheets.
@@ -264,6 +280,7 @@ class GoogleSheetsClient:
             if missing:
                 start_col = len(existing) + 1
                 end_col = start_col + len(missing) - 1
+                self._expand_worksheet_cols(worksheet, end_col)
                 worksheet.update(
                     f"R1C{start_col}:R1C{end_col}",
                     [missing],
@@ -519,6 +536,7 @@ class GoogleSheetsClient:
             return
         start_col = len(header) + 1
         end_col = start_col + len(to_add) - 1
+        self._expand_worksheet_cols(worksheet, end_col)
         worksheet.update(
             f"R1C{start_col}:R1C{end_col}",
             [to_add],
