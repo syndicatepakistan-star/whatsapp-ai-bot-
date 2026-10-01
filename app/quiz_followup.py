@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import unquote
 
@@ -13,7 +14,6 @@ from app.config import Settings
 from app.phone_validator import validate_phone
 from app.sheets import GoogleSheetsClient, _emails_from_text, _normalize_email
 from app.whatsapp import WhatsAppClient
-from app.workflow import build_intake_url
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,57 @@ ALREADY_FOLLOWED_UP = {
     "skipped",
     "failed",
 }
+
+# Only these lead statuses are eligible for the 10-min incomplete quiz nudge.
+ELIGIBLE_LEAD_STATUSES = {
+    "lead captured",
+    "lead_captured",
+}
+
+
+def _parse_lead_timestamp(raw: str) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    text = text.replace("Z", "+0000")
+    formats = (
+        "%Y-%m-%d %H:%M:%S UTC",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%d %H:%M:%S",
+    )
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(text, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _intake_url_from_notes(notes: str) -> str:
+    text = (notes or "").strip()
+    if not text:
+        return ""
+    for match in _URL_RE.findall(text):
+        url = match.rstrip(").,;]")
+        lowered = url.lower()
+        if "quiz" in lowered or "intake" in lowered:
+            return unquote(url)
+    for match in _URL_RE.findall(text):
+        return unquote(match.rstrip(").,;]"))
+    return ""
+
+
+def _row_email(row: dict) -> str:
+    primary = _normalize_email(row.get("email") or "")
+    if primary:
+        return primary
+    from_notes = _emails_from_text(row.get("notes") or "")
+    return next(iter(sorted(from_notes)), "")
 
 
 @dataclass
@@ -51,29 +102,6 @@ class FollowupRunResult:
         }
 
 
-def _intake_url_from_notes(notes: str) -> str:
-    text = (notes or "").strip()
-    if not text:
-        return ""
-    for match in _URL_RE.findall(text):
-        url = match.rstrip(").,;]")
-        lowered = url.lower()
-        if "quiz" in lowered or "intake" in lowered:
-            return unquote(url)
-    # Fallback: first URL in notes
-    for match in _URL_RE.findall(text):
-        return unquote(match.rstrip(").,;]"))
-    return ""
-
-
-def _row_email(row: dict) -> str:
-    primary = _normalize_email(row.get("email") or "")
-    if primary:
-        return primary
-    from_notes = _emails_from_text(row.get("notes") or "")
-    return next(iter(sorted(from_notes)), "")
-
-
 class QuizFollowupService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -89,10 +117,23 @@ class QuizFollowupService:
         force: bool = False,
         include_manual_followup: bool = False,
         check_whatsapp: bool = True,
+        min_age_minutes: int | None = None,
+        only_lead_captured: bool = True,
     ) -> FollowupRunResult:
+        """
+        Send incomplete-quiz follow-ups.
+
+        Default: only rows with status "lead captured", diagnosis Not Completed,
+        older than QUIZ_FOLLOWUP_DELAY_MINUTES (10), and no quiz_followup_status yet.
+        """
         self.sheets.ensure_lead_columns("quiz_followup_status", "quiz_followup_detail")
         rows = self.sheets.list_lead_rows()
         result = FollowupRunResult(dry_run=dry_run, details=[])
+
+        if min_age_minutes is None:
+            min_age_minutes = int(self.settings.quiz_followup_delay_minutes or 10)
+        min_age = max(0, int(min_age_minutes))
+        now = datetime.now(timezone.utc)
 
         processed = 0
         for row in rows:
@@ -110,7 +151,7 @@ class QuizFollowupService:
             status = (row.get("status") or "").strip().lower()
             followup_status = (row.get("quiz_followup_status") or "").strip().lower()
 
-            label = {
+            label: dict[str, Any] = {
                 "row": row_number,
                 "name": name,
                 "email": email or "-",
@@ -124,6 +165,22 @@ class QuizFollowupService:
                 label["detail"] = followup_status
                 result.details.append(label)
                 continue
+
+            # Age gate: wait N minutes after sheet timestamp before nudging.
+            if min_age > 0:
+                captured_at = _parse_lead_timestamp(row.get("timestamp") or "")
+                if captured_at is None:
+                    result.skipped += 1
+                    label["action"] = "skip_no_timestamp"
+                    result.details.append(label)
+                    continue
+                age = now - captured_at
+                if age < timedelta(minutes=min_age):
+                    result.skipped += 1
+                    label["action"] = "skip_too_early"
+                    label["detail"] = f"age_seconds={int(age.total_seconds())}"
+                    result.details.append(label)
+                    continue
 
             if status in SKIP_STATUSES:
                 result.skipped += 1
@@ -150,6 +207,19 @@ class QuizFollowupService:
                 result.details.append(label)
                 processed += 1
                 continue
+
+            if only_lead_captured and status not in ELIGIBLE_LEAD_STATUSES:
+                if (
+                    status in {"manual follow-up needed", "manual follow up needed"}
+                    and include_manual_followup
+                ):
+                    pass
+                else:
+                    result.skipped += 1
+                    label["action"] = "skip_not_lead_captured"
+                    label["detail"] = status or "empty_status"
+                    result.details.append(label)
+                    continue
 
             if (
                 status in {"manual follow-up needed", "manual follow up needed"}
@@ -185,12 +255,13 @@ class QuizFollowupService:
 
             e164 = phone_check.e164
             intake_from_notes = _intake_url_from_notes(row.get("notes") or "")
-            intake_url = build_intake_url(
-                email=email,
-                intake_url=intake_from_notes,
-                intake_base_url=self.settings.intake_base_url,
-            )
-            if not intake_url:
+            # Incomplete-quiz nudge → resume Syn Diagnosis, not post-quiz intake.
+            base = (self.settings.intake_base_url or "https://the-syndicate.com").rstrip("/")
+            quiz_resume = f"{base}/quiz/questions"
+            link_url = intake_from_notes if "/quiz/" in (intake_from_notes or "").lower() else quiz_resume
+            if "intake" in (link_url or "").lower() and "questions" not in (link_url or "").lower():
+                link_url = quiz_resume
+            if not link_url:
                 result.skipped += 1
                 label["action"] = "skip_no_intake_url"
                 if not dry_run:
@@ -204,9 +275,9 @@ class QuizFollowupService:
                 continue
 
             if dry_run:
-                result.sent += 1  # would-send count under dry_run
+                result.sent += 1
                 label["action"] = "dry_run_would_send"
-                label["intake_url"] = intake_url
+                label["intake_url"] = link_url
                 label["e164"] = e164
                 result.details.append(label)
                 processed += 1
@@ -233,7 +304,7 @@ class QuizFollowupService:
                 e164_phone=e164,
                 name=name.split()[0] if name else "there",
                 email=email,
-                intake_url=intake_url,
+                intake_url=link_url,
             )
             if send.ok:
                 result.sent += 1
@@ -260,10 +331,11 @@ class QuizFollowupService:
                 time.sleep(delay)
 
         logger.info(
-            "Quiz followup done sent=%s skipped=%s failed=%s dry_run=%s",
+            "Quiz followup done sent=%s skipped=%s failed=%s dry_run=%s min_age=%s",
             result.sent,
             result.skipped,
             result.failed,
             dry_run,
+            min_age,
         )
         return result

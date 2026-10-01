@@ -565,6 +565,69 @@ class GoogleSheetsClient:
         worksheet.update_cell(row_number, status_col, status)
         worksheet.update_cell(row_number, detail_col, (detail or "")[:500])
 
+    def update_lead_fields(self, row_number: int, **fields: str) -> None:
+        """
+        Update named Leads columns on an existing row.
+        Supported keys: name email phone status notes diagnosis
+        group_add_status group_add_detail quiz_followup_status quiz_followup_detail
+        """
+        wanted = {
+            k: v
+            for k, v in fields.items()
+            if k
+            in {
+                "name",
+                "email",
+                "phone",
+                "status",
+                "notes",
+                "diagnosis",
+                "group_add_status",
+                "group_add_detail",
+                "quiz_followup_status",
+                "quiz_followup_detail",
+            }
+            and v is not None
+        }
+        if not wanted:
+            return
+
+        ensure = [
+            name
+            for name in (
+                "diagnosis",
+                "group_add_status",
+                "group_add_detail",
+                "quiz_followup_status",
+                "quiz_followup_detail",
+            )
+            if name in wanted
+        ]
+        if ensure:
+            self.ensure_lead_columns(*ensure)
+
+        worksheet = self._get_worksheet()
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+        alias_to_canonical = {
+            "group_add_dated": "group_add_detail",
+            "group_add_date": "group_add_detail",
+            "group_add_notes": "group_add_detail",
+        }
+
+        for key, value in wanted.items():
+            col = None
+            try:
+                col = header.index(key) + 1
+            except ValueError:
+                for alias, canonical in alias_to_canonical.items():
+                    if canonical == key and alias in header:
+                        col = header.index(alias) + 1
+                        break
+            if col is None:
+                logger.warning("Leads header missing for field=%s — skip", key)
+                continue
+            worksheet.update_cell(int(row_number), col, str(value))
+
     def update_lead_group_status(
         self,
         row_number: int,

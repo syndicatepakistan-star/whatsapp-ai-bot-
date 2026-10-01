@@ -46,13 +46,14 @@ class Settings(BaseSettings):
     # Set WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT in Railway when final copy is ready.
     whapi_quiz_followup_message_text: str = (
         "Hi {name},\n\n"
-        "You have not finished Syn Diagnosis yet.\n\n"
-        "Complete the quick form here and we will get you booked "
-        "for your founder audit:\n\n"
+        "You started Syn Diagnosis but have not finished yet.\n\n"
+        "Continue here — it only takes a few minutes:\n\n"
         "{intake_url}\n\n"
         "With Honour\n"
         "The Syndicate"
     )
+    # Minutes to wait after lead capture before sending incomplete-quiz follow-up.
+    quiz_followup_delay_minutes: int = 10
 
     # Audit booking confirmation message.
     # Placeholders: {name} {email} {meet_link} {slot_local} {timezone}

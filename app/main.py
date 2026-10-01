@@ -100,6 +100,9 @@ class QuizFollowupPayload(BaseModel):
     force: bool = False
     include_manual_followup: bool = False
     skip_whatsapp_check: bool = False
+    # None = use QUIZ_FOLLOWUP_DELAY_MINUTES (default 10). Use 0 to ignore age.
+    min_age_minutes: int | None = Field(default=None, ge=0, le=10080)
+    only_lead_captured: bool = True
 
 
 @app.post("/admin/quiz-followup")
@@ -109,8 +112,8 @@ def quiz_followup(
 ) -> dict[str, Any]:
     """
     WhatsApp follow-up for Leads where diagnosis = Not Completed.
-    Same link-then-text pattern as audit booking. Auth: X-Webhook-Secret.
-    Prefer dry_run first. Or use: python scripts/message_not_completed.py --dry-run
+    Default waits QUIZ_FOLLOWUP_DELAY_MINUTES after lead capture.
+    Auth: X-Webhook-Secret.
     """
     _check_webhook_secret(x_webhook_secret)
     from app.quiz_followup import QuizFollowupService
@@ -123,6 +126,8 @@ def quiz_followup(
         force=bool(payload.force),
         include_manual_followup=bool(payload.include_manual_followup),
         check_whatsapp=not bool(payload.skip_whatsapp_check),
+        min_age_minutes=payload.min_age_minutes,
+        only_lead_captured=bool(payload.only_lead_captured),
     )
     return result.as_dict()
 
@@ -288,6 +293,37 @@ def run_reminders(
     result = workflow.process_due_reminders()
     logger.info("Reminders tick result=%s", result)
     return result
+
+
+@app.post("/cron/quiz-followup")
+@app.get("/cron/quiz-followup")
+def run_quiz_followup_cron(
+    x_cron_secret: str | None = Header(default=None),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Call every 2–5 minutes (Railway cron / cron-job.org).
+
+    Sends incomplete-quiz WhatsApp to Leads still Not Completed after
+    QUIZ_FOLLOWUP_DELAY_MINUTES (default 10) with status \"lead captured\".
+    Auth: CRON_SECRET (X-Cron-Secret) or WEBHOOK_SECRET (X-Webhook-Secret).
+    """
+    _check_cron_secret(x_cron_secret, x_webhook_secret)
+    from app.quiz_followup import QuizFollowupService
+
+    settings = get_settings()
+    result = QuizFollowupService(settings).run(
+        dry_run=False,
+        limit=50,
+        delay=1.5,
+        force=False,
+        include_manual_followup=False,
+        check_whatsapp=True,
+        min_age_minutes=None,  # use settings.quiz_followup_delay_minutes
+        only_lead_captured=True,
+    )
+    logger.info("Quiz followup cron result=%s", result.as_dict())
+    return result.as_dict()
 
 
 def _check_cron_secret(

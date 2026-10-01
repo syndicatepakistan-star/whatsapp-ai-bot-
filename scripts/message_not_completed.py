@@ -1,16 +1,13 @@
 """
-Message Leads sheet rows where diagnosis = Not Completed.
+Message Leads sheet rows where diagnosis = Not Completed (after delay).
 
-Sends WhatsApp follow-up with quiz intake link (same link-then-text pattern
-as the audit booking message). Final copy: set WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT
-in Railway (placeholders: {name} {email} {intake_url}).
+Default: only status=lead captured, older than QUIZ_FOLLOWUP_DELAY_MINUTES (10).
 
-Usage (Bot A container / repo root):
+Usage (Bot A container):
   python scripts/message_not_completed.py --dry-run
   python scripts/message_not_completed.py --dry-run --limit 5
   python scripts/message_not_completed.py --limit 10
-  python scripts/message_not_completed.py --include-manual-followup
-  python scripts/message_not_completed.py --force
+  python scripts/message_not_completed.py --min-age-minutes 0   # ignore age (manual blast)
 """
 
 from __future__ import annotations
@@ -48,6 +45,17 @@ def main() -> int:
         action="store_true",
         help="Do not call Whapi contact check before send",
     )
+    parser.add_argument(
+        "--min-age-minutes",
+        type=int,
+        default=None,
+        help="Only rows older than this (default = QUIZ_FOLLOWUP_DELAY_MINUTES). Use 0 to ignore age.",
+    )
+    parser.add_argument(
+        "--all-statuses",
+        action="store_true",
+        help="Do not require status=lead captured (legacy rows)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -59,6 +67,8 @@ def main() -> int:
         force=bool(args.force),
         include_manual_followup=bool(args.include_manual_followup),
         check_whatsapp=not bool(args.skip_whatsapp_check),
+        min_age_minutes=args.min_age_minutes,
+        only_lead_captured=not bool(args.all_statuses),
     )
 
     for item in result.details or []:
