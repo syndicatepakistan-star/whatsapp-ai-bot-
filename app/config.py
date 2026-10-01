@@ -42,16 +42,19 @@ class Settings(BaseSettings):
     whapi_link_separate: bool = True
 
     # Quiz incomplete follow-up (diagnosis = Not Completed).
-    # Placeholders: {name} {email} {intake_url}
-    # Set WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT in Railway when final copy is ready.
+    # Placeholders: {name} {email} {quiz_url}
+    # {quiz_url} = Syn Diagnosis questions page (NOT intake / audit form).
     whapi_quiz_followup_message_text: str = (
         "Hi {name},\n\n"
         "You started Syn Diagnosis but have not finished yet.\n\n"
         "Continue here — it only takes a few minutes:\n\n"
-        "{intake_url}\n\n"
+        "{quiz_url}\n\n"
         "With Honour\n"
         "The Syndicate"
     )
+    # Base used to build quiz resume link: {INTAKE_BASE_URL}/quiz/questions
+    # Override full URL with QUIZ_RESUME_URL if needed.
+    quiz_resume_url: str = ""
     # Minutes to wait after lead capture before sending incomplete-quiz follow-up.
     quiz_followup_delay_minutes: int = 10
 

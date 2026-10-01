@@ -254,30 +254,19 @@ class QuizFollowupService:
                 continue
 
             e164 = phone_check.e164
-            intake_from_notes = _intake_url_from_notes(row.get("notes") or "")
-            # Incomplete-quiz nudge → resume Syn Diagnosis, not post-quiz intake.
+            # Follow-up always goes to quiz questions — never intake/audit form.
+            configured = (self.settings.quiz_resume_url or "").strip()
             base = (self.settings.intake_base_url or "https://the-syndicate.com").rstrip("/")
-            quiz_resume = f"{base}/quiz/questions"
-            link_url = intake_from_notes if "/quiz/" in (intake_from_notes or "").lower() else quiz_resume
-            if "intake" in (link_url or "").lower() and "questions" not in (link_url or "").lower():
-                link_url = quiz_resume
-            if not link_url:
-                result.skipped += 1
-                label["action"] = "skip_no_intake_url"
-                if not dry_run:
-                    self.sheets.update_lead_quiz_followup(
-                        row_number,
-                        status="skipped",
-                        detail="no_intake_url",
-                    )
-                result.details.append(label)
-                processed += 1
-                continue
+            quiz_url = configured or f"{base}/quiz/questions"
+            notes_url = _intake_url_from_notes(row.get("notes") or "")
+            # Prefer notes URL only if it is clearly the quiz questions page.
+            if notes_url and "questions" in notes_url.lower():
+                quiz_url = notes_url
 
             if dry_run:
                 result.sent += 1
                 label["action"] = "dry_run_would_send"
-                label["intake_url"] = link_url
+                label["quiz_url"] = quiz_url
                 label["e164"] = e164
                 result.details.append(label)
                 processed += 1
@@ -304,7 +293,7 @@ class QuizFollowupService:
                 e164_phone=e164,
                 name=name.split()[0] if name else "there",
                 email=email,
-                intake_url=link_url,
+                quiz_url=quiz_url,
             )
             if send.ok:
                 result.sent += 1

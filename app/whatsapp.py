@@ -204,11 +204,12 @@ class WhatsAppClient:
         e164_phone: str,
         name: str,
         email: str = "",
-        intake_url: str = "",
+        quiz_url: str = "",
     ) -> WhatsAppSendResult:
         """
-        Send quiz-incomplete follow-up (same link-then-text pattern as audit).
-        Template: WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT — {name} {email} {intake_url}
+        Send quiz-incomplete follow-up (link-then-text like audit).
+        Template: WHAPI_QUIZ_FOLLOWUP_MESSAGE_TEXT — {name} {email} {quiz_url}
+        Uses quiz questions URL only — never the intake/audit form URL.
         """
         if not self._configured():
             return WhatsAppSendResult(False, detail="whapi_not_configured")
@@ -219,30 +220,31 @@ class WhatsAppClient:
 
         display_name = (name or "there").strip() or "there"
         display_email = (email or "").strip().lower()
-        display_url = (intake_url or "").strip()
+        display_url = (quiz_url or "").strip()
 
         template = self.settings.whapi_quiz_followup_message_text or (
-            "Hi {name},\n\nPlease complete Syn Diagnosis:\n{intake_url}\n\n"
+            "Hi {name},\n\nPlease complete Syn Diagnosis:\n{quiz_url}\n\n"
             "With Honour\nThe Syndicate"
         )
         template = template.replace("\\n", "\n")
 
-        body = (
-            template.replace("{name}", display_name)
-            .replace("{email}", display_email)
-            .replace("{intake_url}", display_url)
-        ).strip()
+        def _render(url_value: str) -> str:
+            return (
+                template.replace("{name}", display_name)
+                .replace("{email}", display_email)
+                .replace("{quiz_url}", url_value)
+                # Legacy alias if an old Railway template still says {intake_url}
+                .replace("{intake_url}", url_value)
+            ).strip()
+
+        body = _render(display_url)
 
         if self.settings.whapi_link_separate and display_url:
             link_result = self._post_text(phone=phone, body=display_url)
             if not link_result.ok:
                 return link_result
 
-            text_only = (
-                template.replace("{name}", display_name)
-                .replace("{email}", display_email)
-                .replace("{intake_url}", "")
-            ).strip()
+            text_only = _render("")
             while "\n\n\n" in text_only:
                 text_only = text_only.replace("\n\n\n", "\n\n")
             text_only = text_only.strip()
@@ -256,7 +258,12 @@ class WhatsAppClient:
                 message_id=text_result.message_id or link_result.message_id,
             )
 
-        if display_url and "{intake_url}" not in template and display_url not in body:
+        if (
+            display_url
+            and "{quiz_url}" not in template
+            and "{intake_url}" not in template
+            and display_url not in body
+        ):
             body = f"{body}\n\n{display_url}"
 
         return self._post_text(phone=phone, body=body)

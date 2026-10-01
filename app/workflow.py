@@ -205,7 +205,8 @@ class LeadWorkflow:
             )
 
         notes = (
-            f"awaiting quiz completion | {self.settings.intake_base_url.rstrip('/')}/quiz/questions"
+            f"awaiting quiz completion | "
+            f"{(self.settings.quiz_resume_url or '').strip() or (self.settings.intake_base_url.rstrip('/') + '/quiz/questions')}"
         )
         return self._write_or_update_capture(
             matches=matches,

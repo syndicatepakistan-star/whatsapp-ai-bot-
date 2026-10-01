@@ -75,7 +75,7 @@ def main() -> int:
         print(
             f"{item.get('action')} row={item.get('row')} "
             f"{item.get('email')} {item.get('phone')} "
-            f"→ {item.get('detail') or item.get('intake_url') or '-'}"
+            f"→ {item.get('detail') or item.get('quiz_url') or '-'}"
         )
 
     print(
