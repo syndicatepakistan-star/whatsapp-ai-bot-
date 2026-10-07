@@ -67,6 +67,12 @@ GOOGLE_SERVICE_ACCOUNT_JSON={...full json...}
 WHAPI_TOKEN=...
 WHAPI_API_URL=https://gate.whapi.cloud
 WHAPI_MESSAGE_TEXT=Hi {name}, thanks for completing the Syn Diagnosis quiz. We'll be in touch shortly.
+
+# UK SMS (Vonage) — only +44 when status is manual follow-up needed OR lead captured
+SMS_ENABLED=true
+VONAGE_API_KEY=
+VONAGE_API_SECRET=
+VONAGE_FROM=
 ```
 
 Redeploy the Railway bot after saving.
@@ -84,9 +90,12 @@ Redeploy the Railway bot after saving.
 | Sheet status | Meaning |
 |--------------|---------|
 | wrong number | Invalid phone format |
-| manual follow-up needed | Not on WhatsApp |
+| manual follow-up needed | Not on WhatsApp (UK → Vonage SMS if configured) |
+| lead captured | On WhatsApp, quiz incomplete (UK → Vonage SMS if configured) |
 | whatsapp message sent | Success |
 | whatsapp send failed | Token / Whapi / message error |
+
+Notes column may include `SMS sent: <id>` or `SMS failed: …` for UK SMS tracking.
 
 ---
 

@@ -10,6 +10,13 @@ from app.community_agent import CommunityAgent
 from app.config import Settings
 from app.phone_validator import validate_phone
 from app.sheets import GoogleSheetsClient, _find_diagnosis_matches
+from app.sms import (
+    SmsClient,
+    already_sms_noted,
+    format_sms_notes_suffix,
+    is_uk_e164,
+    quiz_resume_url,
+)
 from app.whatsapp import WhatsAppClient
 
 logger = logging.getLogger(__name__)
@@ -20,6 +27,12 @@ STATUS_LEAD_CAPTURED = "lead captured"
 STATUS_WHATSAPP_SENT = "whatsapp message sent"
 STATUS_WHATSAPP_SEND_FAILED = "whatsapp send failed"
 STATUS_DIAGNOSIS_UPDATED = "diagnosis updated"
+
+# Sheet statuses that trigger UK SMS (same copy as WhatsApp by diagnosis).
+SMS_ELIGIBLE_STATUSES = {
+    STATUS_MANUAL_NEEDED,
+    STATUS_LEAD_CAPTURED,
+}
 
 AUDIT_ALREADY_SENT_STATUSES = {
     STATUS_WHATSAPP_SENT,
@@ -45,6 +58,7 @@ class LeadResult:
     group_add_status: str = ""
     group_add_detail: str = ""
     diagnosis: str = "Not Completed"
+    sms_detail: str = ""
 
 
 def build_intake_url(*, email: str, intake_url: str, intake_base_url: str) -> str:
@@ -66,7 +80,68 @@ class LeadWorkflow:
         self.settings = settings
         self.sheets = GoogleSheetsClient(settings)
         self.whatsapp = WhatsAppClient(settings)
+        self.sms = SmsClient(settings)
         self.community = CommunityAgent(settings, self.whatsapp)
+
+    def _append_note(self, notes: str, suffix: str) -> str:
+        base = (notes or "").strip()
+        extra = (suffix or "").strip()
+        if not extra:
+            return base
+        if not base:
+            return extra
+        return f"{base} | {extra}"
+
+    def _maybe_uk_sms(
+        self,
+        *,
+        status: str,
+        e164: str,
+        name: str,
+        email: str,
+        diagnosis: str,
+        notes: str,
+        intake_url: str = "",
+        prior_notes: str = "",
+    ) -> tuple[str, str]:
+        """
+        If status is manual follow-up / lead captured and phone is UK,
+        send SMS with WhatsApp-equivalent copy for diagnosis.
+        Returns (notes_with_sms_suffix, sms_detail).
+        """
+        if status not in SMS_ELIGIBLE_STATUSES:
+            return notes, ""
+        if not e164 or not is_uk_e164(e164):
+            return notes, ""
+        combined_notes = f"{prior_notes} {notes}".strip()
+        if already_sms_noted(combined_notes):
+            return notes, "sms_already_noted"
+        if not self.sms.configured():
+            logger.info(
+                "UK SMS skipped (Vonage not configured) status=%s phone=%s",
+                status,
+                e164,
+            )
+            return notes, "sms_not_configured"
+
+        result = self.sms.send_for_diagnosis(
+            e164_phone=e164,
+            name=name,
+            email=email,
+            diagnosis=diagnosis,
+            quiz_url=quiz_resume_url(self.settings),
+            intake_url=intake_url,
+        )
+        suffix = format_sms_notes_suffix(result)
+        sms_detail = (
+            f"sms_sent:{result.message_id or result.detail}"
+            if result.ok
+            else (result.detail or "sms_failed")
+        )
+        return self._append_note(notes, suffix), sms_detail
+
+    def _prior_notes(self, matches: list[dict]) -> str:
+        return " ".join((m.get("notes") or "") for m in matches)
 
     def process(
         self,
@@ -185,28 +260,50 @@ class LeadWorkflow:
         e164 = phone_check.e164
         wa_check = self.whatsapp.check_number_on_whatsapp(e164)
         if not wa_check.exists:
+            notes = (
+                "WhatsApp number does not exist / could not verify. "
+                f"Detail: {wa_check.detail}. Text them manually."
+                + (f" Intake: {intake_url}" if intake_url else "")
+            )
+            notes, sms_detail = self._maybe_uk_sms(
+                status=STATUS_MANUAL_NEEDED,
+                e164=e164,
+                name=name,
+                email=email,
+                diagnosis="Not Completed",
+                notes=notes,
+                intake_url=intake_url,
+                prior_notes=self._prior_notes(matches),
+            )
             return self._write_or_update_capture(
                 matches=matches,
                 name=name,
                 email=email,
                 phone=e164,
                 status=STATUS_MANUAL_NEEDED,
-                notes=(
-                    "WhatsApp number does not exist / could not verify. "
-                    f"Detail: {wa_check.detail}. Text them manually."
-                    + (f" Intake: {intake_url}" if intake_url else "")
-                ),
+                notes=notes,
                 group_add_status="skipped",
                 group_add_detail="not_on_whatsapp",
                 intake_url=intake_url,
                 action="sheet_manual_followup",
                 detail=wa_check.detail,
                 phone_e164=e164,
+                sms_detail=sms_detail,
             )
 
         notes = (
             f"awaiting quiz completion | "
-            f"{(self.settings.quiz_resume_url or '').strip() or (self.settings.intake_base_url.rstrip('/') + '/quiz/questions')}"
+            f"{quiz_resume_url(self.settings)}"
+        )
+        notes, sms_detail = self._maybe_uk_sms(
+            status=STATUS_LEAD_CAPTURED,
+            e164=e164,
+            name=name,
+            email=email,
+            diagnosis="Not Completed",
+            notes=notes,
+            intake_url=intake_url,
+            prior_notes=self._prior_notes(matches),
         )
         return self._write_or_update_capture(
             matches=matches,
@@ -221,6 +318,7 @@ class LeadWorkflow:
             action="lead_captured",
             detail="awaiting quiz completion — no WhatsApp until Completed",
             phone_e164=e164,
+            sms_detail=sms_detail,
         )
 
     def _write_or_update_capture(
@@ -238,6 +336,7 @@ class LeadWorkflow:
         action: str,
         detail: str,
         phone_e164: str,
+        sms_detail: str = "",
     ) -> LeadResult:
         if matches:
             for match in matches:
@@ -276,6 +375,7 @@ class LeadWorkflow:
                 group_add_status=group_add_status,
                 group_add_detail=group_add_detail,
                 diagnosis="Not Completed",
+                sms_detail=sms_detail,
             )
 
         self._safe_sheet(
@@ -297,6 +397,7 @@ class LeadWorkflow:
             group_add_status=group_add_status,
             group_add_detail=group_add_detail,
             diagnosis="Not Completed",
+            sms_detail=sms_detail,
         )
 
     def _deliver_audit_on_completed(
@@ -376,6 +477,16 @@ class LeadWorkflow:
                 f"Detail: {wa_check.detail}. Text them manually."
                 + (f" Intake: {intake_url}" if intake_url else "")
             )
+            notes, sms_detail = self._maybe_uk_sms(
+                status=STATUS_MANUAL_NEEDED,
+                e164=e164,
+                name=name,
+                email=email,
+                diagnosis="Completed",
+                notes=notes,
+                intake_url=intake_url,
+                prior_notes=self._prior_notes(matches),
+            )
             self._persist_completed_outcome(
                 matches=matches,
                 name=name,
@@ -395,6 +506,7 @@ class LeadWorkflow:
                 group_add_status="skipped",
                 group_add_detail="not_on_whatsapp",
                 diagnosis="Completed",
+                sms_detail=sms_detail,
             )
 
         send = self.whatsapp.send_text(

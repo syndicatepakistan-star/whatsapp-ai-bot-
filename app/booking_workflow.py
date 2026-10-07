@@ -80,13 +80,24 @@ def render_booking_message(
     timezone_name: str,
 ) -> str:
     text = (template or "").replace("\\n", "\n")
-    return (
+    meet = (meet_link or "").strip()
+    meet_placeholder = meet or "Your Meet link will be shared before the call."
+    rendered = (
         text.replace("{name}", (name or "there").strip() or "there")
         .replace("{email}", (email or "").strip().lower())
-        .replace("{meet_link}", (meet_link or "").strip())
+        .replace("{meet_link}", meet_placeholder)
         .replace("{slot_local}", slot_local)
         .replace("{timezone}", (timezone_name or "").strip())
     ).strip()
+    if not meet:
+        # Soften Meet-specific lines when no URL was provided.
+        rendered = (
+            rendered.replace("Join with Google Meet:\n", "")
+            .replace("Join here:\n", "")
+        )
+        while "\n\n\n" in rendered:
+            rendered = rendered.replace("\n\n\n", "\n\n")
+    return rendered.strip()
 
 
 class BookingWorkflow:

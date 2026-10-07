@@ -188,6 +188,7 @@ def receive_lead(
         "group_add_status": result.group_add_status,
         "group_add_detail": result.group_add_detail,
         "diagnosis": result.diagnosis,
+        "sms_detail": result.sms_detail,
     }
 
 
@@ -233,8 +234,7 @@ def receive_booking(
 
     if not (payload.phone or "").strip():
         raise HTTPException(status_code=400, detail="phone is required")
-    if not (payload.meet_link or "").strip():
-        raise HTTPException(status_code=400, detail="meet_link is required")
+    # meet_link optional — calendar service account cannot always create Meet links
     if not (payload.slot_start or "").strip():
         raise HTTPException(status_code=400, detail="slot_start is required")
 

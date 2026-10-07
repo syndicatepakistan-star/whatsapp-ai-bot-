@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     # Minutes to wait after lead capture before sending incomplete-quiz follow-up.
     quiz_followup_delay_minutes: int = 10
 
+    # --- UK SMS (Vonage Messages API) ---
+    # Used when Leads status is "manual follow-up needed" or "lead captured"
+    # AND phone is UK (+44). Message copy matches WhatsApp templates by diagnosis.
+    # Leave keys empty to disable (safe no-op).
+    sms_enabled: bool = True
+    vonage_api_key: str = ""
+    vonage_api_secret: str = ""
+    # UK virtual number digits (447…) or alphanumeric sender (e.g. SYNDICATE)
+    vonage_from: str = ""
+
     # Audit booking confirmation message.
     # Placeholders: {name} {email} {meet_link} {slot_local} {timezone}
     whapi_booking_message_text: str = (
