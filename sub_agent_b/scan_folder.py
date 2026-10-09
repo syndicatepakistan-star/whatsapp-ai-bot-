@@ -6,6 +6,7 @@ Usage (from repo root):
   python -m sub_agent_b.scan_folder --count 30 --time 12:00 --target both
   python -m sub_agent_b.scan_folder --folder "https://drive.google.com/drive/folders/XXXX"
   python -m sub_agent_b.scan_folder --start-date 2026-09-25
+  python -m sub_agent_b.scan_folder --fill-empty --count 10 --time 00:00
 """
 
 from __future__ import annotations
@@ -56,6 +57,16 @@ def main() -> int:
         action="store_true",
         help="Do not use filename as caption when caption is empty",
     )
+    parser.add_argument(
+        "--fill-empty",
+        action="store_true",
+        help="Fill rows that already have a date but empty file_url (keep your weekend dates)",
+    )
+    parser.add_argument(
+        "--weekends-only",
+        action="store_true",
+        help="Schedule on Saturdays and Sundays only (PKT time still from --time)",
+    )
     args = parser.parse_args()
 
     settings = get_settings()
@@ -67,6 +78,8 @@ def main() -> int:
         caption=args.caption if args.caption else None,
         start_date=(args.start_date or "").strip() or None,
         caption_from_filename=False if args.no_filename_caption else None,
+        fill_empty=bool(args.fill_empty),
+        weekends_only=bool(args.weekends_only),
     )
     print(
         json.dumps(

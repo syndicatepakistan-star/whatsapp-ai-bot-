@@ -72,6 +72,9 @@ class ContentPoster:
 
         due_rows = []
         for row in pending:
+            # Incomplete template rows (time filled, date empty) — ignore, don't mark failed
+            if not (row.get("date") or "").strip():
+                continue
             when = parse_row_datetime(row, tz_name)
             if when is None:
                 due_rows.append((row, "bad_datetime"))

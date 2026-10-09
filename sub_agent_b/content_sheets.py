@@ -195,6 +195,20 @@ class ContentSheetsClient:
             created.append(item)
         return created
 
+    def update_row_fields(self, row_number: int, fields: dict[str, str]) -> None:
+        """Update named columns on an existing ContentCalendar row (keeps other cells)."""
+        if not fields:
+            return
+        worksheet = self._get_worksheet()
+        header = [h.strip().lower() for h in worksheet.row_values(1)]
+        for name, value in fields.items():
+            key = (name or "").strip().lower()
+            if not key or key not in header:
+                continue
+            col = header.index(key) + 1
+            worksheet.update_cell(row_number, col, value or "")
+        logger.info("ContentCalendar row=%s fields=%s", row_number, list(fields.keys()))
+
 
 def parse_row_datetime(row: dict, tz_name: str) -> datetime | None:
     """

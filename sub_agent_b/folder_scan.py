@@ -86,6 +86,22 @@ def detect_media_type(name: str, mime_type: str = "") -> str | None:
     return None
 
 
+def weekend_dates_from(start: date, count: int) -> list[date]:
+    """Return the next `count` Saturday/Sunday dates starting at/after `start`."""
+    if count <= 0:
+        return []
+    day = start
+    # Move to Saturday (5) or Sunday (6); if weekday, jump to this week's Saturday
+    while day.weekday() not in (5, 6):
+        day += timedelta(days=1)
+    out: list[date] = []
+    while len(out) < count:
+        if day.weekday() in (5, 6):
+            out.append(day)
+        day += timedelta(days=1)
+    return out
+
+
 def drive_file_url(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
@@ -196,6 +212,8 @@ class FolderScanner:
         caption: str | None = None,
         start_date: str | None = None,
         caption_from_filename: bool | None = None,
+        fill_empty: bool = False,
+        weekends_only: bool = False,
     ) -> FolderScanResult:
         folder_raw = (folder or "").strip() or (
             self.settings.google_drive_content_folder_id or ""
@@ -281,9 +299,80 @@ class FolderScanner:
             candidates.append((f, media_type))
 
         selected = candidates[:max_count]
+
+        # Fill existing date rows that have no file_url (weekend template workflow)
+        if fill_empty:
+            empty_slots = [
+                row
+                for row in self.sheets.list_rows()
+                if (row.get("date") or "").strip()
+                and not (row.get("file_url") or "").strip()
+            ]
+            if not empty_slots:
+                return FolderScanResult(
+                    ok=True,
+                    folder_id=folder_id,
+                    scanned=len(all_files),
+                    skipped_used=skipped_used,
+                    skipped_unsupported=skipped_unsupported,
+                    created=0,
+                    detail="no_empty_file_url_slots",
+                )
+            to_fill = empty_slots[: len(selected)]
+            filled: list[dict[str, Any]] = []
+            try:
+                for slot, (f, media_type) in zip(to_fill, selected):
+                    if use_filename_caption and not (default_caption or "").strip():
+                        cap = Path(f.name).stem
+                    else:
+                        cap = (default_caption or "").strip()
+                    fields = {
+                        "type": media_type,
+                        "file_url": drive_file_url(f.id),
+                        "caption": cap or (slot.get("caption") or ""),
+                        "status": (slot.get("status") or "").strip() or "pending",
+                        "notes": f"auto_scan_fill folder={folder_id} file={f.name}",
+                    }
+                    if not (slot.get("time") or "").strip():
+                        fields["time"] = time_val
+                    if not (slot.get("target") or "").strip():
+                        fields["target"] = target_val
+                    self.sheets.update_row_fields(int(slot["_row"]), fields)
+                    item = dict(slot)
+                    item.update(fields)
+                    filled.append(item)
+            except Exception as exc:
+                logger.exception("ContentCalendar fill-empty failed")
+                return FolderScanResult(
+                    ok=False,
+                    folder_id=folder_id,
+                    scanned=len(all_files),
+                    skipped_used=skipped_used,
+                    skipped_unsupported=skipped_unsupported,
+                    detail=f"sheet_fill_failed: {exc}",
+                )
+            return FolderScanResult(
+                ok=True,
+                folder_id=folder_id,
+                scanned=len(all_files),
+                skipped_used=skipped_used,
+                skipped_unsupported=skipped_unsupported,
+                created=len(filled),
+                detail=(
+                    f"filled_empty={len(filled)} "
+                    f"time={time_val} target={target_val}"
+                ),
+                rows=filled,
+            )
+
+        if weekends_only:
+            schedule_days = weekend_dates_from(start, len(selected))
+        else:
+            schedule_days = [start + timedelta(days=i) for i in range(len(selected))]
+
         rows_to_add: list[dict[str, str]] = []
         for i, (f, media_type) in enumerate(selected):
-            day = start + timedelta(days=i)
+            day = schedule_days[i]
             if use_filename_caption and not (default_caption or "").strip():
                 cap = Path(f.name).stem
             else:
@@ -326,6 +415,7 @@ class FolderScanner:
                 detail=f"sheet_append_failed: {exc}",
             )
 
+        weekend_note = " weekends_only" if weekends_only else ""
         return FolderScanResult(
             ok=True,
             folder_id=folder_id,
@@ -335,7 +425,7 @@ class FolderScanner:
             created=len(created_rows),
             detail=(
                 f"created={len(created_rows)} start={start.isoformat()} "
-                f"time={time_val} target={target_val}"
+                f"time={time_val} target={target_val}{weekend_note}"
             ),
             rows=created_rows,
         )
