@@ -570,6 +570,7 @@ class GoogleSheetsClient:
         Update named Leads columns on an existing row.
         Supported keys: name email phone status notes diagnosis
         group_add_status group_add_detail quiz_followup_status quiz_followup_detail
+        daily_reminder_date daily_reminder_type
         """
         wanted = {
             k: v
@@ -586,6 +587,8 @@ class GoogleSheetsClient:
                 "group_add_detail",
                 "quiz_followup_status",
                 "quiz_followup_detail",
+                "daily_reminder_date",
+                "daily_reminder_type",
             }
             and v is not None
         }
@@ -600,6 +603,8 @@ class GoogleSheetsClient:
                 "group_add_detail",
                 "quiz_followup_status",
                 "quiz_followup_detail",
+                "daily_reminder_date",
+                "daily_reminder_type",
             )
             if name in wanted
         ]

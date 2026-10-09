@@ -58,6 +58,28 @@ class Settings(BaseSettings):
     # Minutes to wait after lead capture before sending incomplete-quiz follow-up.
     quiz_followup_delay_minutes: int = 10
 
+    # --- Daily funnel reminders (quiz incomplete / audit not booked) ---
+    # Cron: GET/POST /cron/daily-reminders (once per day is enough).
+    daily_reminders_enabled: bool = True
+    daily_reminder_timezone: str = "Asia/Karachi"
+    daily_reminder_max_per_run: int = 40
+    # Placeholders: {name} {email} {quiz_url}
+    whapi_daily_quiz_reminder_text: str = (
+        "Hi {name},\n\n"
+        "Friendly reminder — finish Syn Diagnosis when you can:\n\n"
+        "{quiz_url}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
+    # Placeholders: {name} {email} {intake_url}
+    whapi_daily_audit_reminder_text: str = (
+        "Hi {name},\n\n"
+        "You've completed Syn Diagnosis. Book your founder audit here:\n\n"
+        "{intake_url}\n\n"
+        "With Honour\n"
+        "The Syndicate"
+    )
+
     # --- UK SMS (Vonage Messages API) ---
     # Used when Leads status is "manual follow-up needed" or "lead captured"
     # AND phone is UK (+44). Message copy matches WhatsApp templates by diagnosis.

@@ -326,6 +326,35 @@ def run_quiz_followup_cron(
     return result.as_dict()
 
 
+@app.post("/cron/daily-reminders")
+@app.get("/cron/daily-reminders")
+def run_daily_reminders_cron(
+    x_cron_secret: str | None = Header(default=None),
+    x_webhook_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Daily funnel reminders (call once per day, e.g. 20:00 PKT).
+
+    - Not Completed → quiz link reminder (max once per calendar day)
+    - Completed + no Bookings row → audit booking reminder (max once per day)
+    - Already booked → stop (daily_reminder_type=done)
+
+    Auth: CRON_SECRET (X-Cron-Secret) or WEBHOOK_SECRET (X-Webhook-Secret).
+    """
+    _check_cron_secret(x_cron_secret, x_webhook_secret)
+    from app.daily_reminders import DailyReminderService
+
+    settings = get_settings()
+    result = DailyReminderService(settings).run(
+        dry_run=False,
+        limit=0,
+        delay=1.5,
+        check_whatsapp=True,
+    )
+    logger.info("Daily reminders cron result=%s", result.as_dict())
+    return result.as_dict()
+
+
 def _check_cron_secret(
     x_cron_secret: str | None,
     x_webhook_secret: str | None,

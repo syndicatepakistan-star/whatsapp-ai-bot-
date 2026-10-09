@@ -268,6 +268,104 @@ class WhatsAppClient:
 
         return self._post_text(phone=phone, body=body)
 
+    def send_daily_quiz_reminder(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str = "",
+        quiz_url: str = "",
+    ) -> WhatsAppSendResult:
+        """Daily nudge: quiz still incomplete. Placeholders {name} {email} {quiz_url}."""
+        template = self.settings.whapi_daily_quiz_reminder_text or (
+            self.settings.whapi_quiz_followup_message_text
+            or "Hi {name},\n\nPlease finish Syn Diagnosis:\n{quiz_url}\n\n"
+            "With Honour\nThe Syndicate"
+        )
+        return self._send_templated_url_message(
+            e164_phone=e164_phone,
+            name=name,
+            email=email,
+            url=quiz_url,
+            template=template,
+            url_keys=("quiz_url", "intake_url"),
+        )
+
+    def send_daily_audit_reminder(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str = "",
+        intake_url: str = "",
+    ) -> WhatsAppSendResult:
+        """Daily nudge: quiz done, book audit. Placeholders {name} {email} {intake_url}."""
+        template = self.settings.whapi_daily_audit_reminder_text or (
+            "Hi {name},\n\n"
+            "You've completed Syn Diagnosis — book your founder audit here:\n\n"
+            "{intake_url}\n\n"
+            "With Honour\nThe Syndicate"
+        )
+        return self._send_templated_url_message(
+            e164_phone=e164_phone,
+            name=name,
+            email=email,
+            url=intake_url,
+            template=template,
+            url_keys=("intake_url", "quiz_url"),
+        )
+
+    def _send_templated_url_message(
+        self,
+        *,
+        e164_phone: str,
+        name: str,
+        email: str,
+        url: str,
+        template: str,
+        url_keys: tuple[str, ...],
+    ) -> WhatsAppSendResult:
+        if not self._configured():
+            return WhatsAppSendResult(False, detail="whapi_not_configured")
+
+        phone = _digits_only(e164_phone)
+        if not phone:
+            return WhatsAppSendResult(False, detail="empty_phone")
+
+        display_name = (name or "there").strip() or "there"
+        display_email = (email or "").strip().lower()
+        display_url = (url or "").strip()
+        tpl = (template or "").replace("\\n", "\n")
+
+        def _render(url_value: str) -> str:
+            body = (
+                tpl.replace("{name}", display_name).replace("{email}", display_email)
+            )
+            for key in url_keys:
+                body = body.replace("{" + key + "}", url_value)
+            return body.strip()
+
+        body = _render(display_url)
+        if self.settings.whapi_link_separate and display_url:
+            link_result = self._post_text(phone=phone, body=display_url)
+            if not link_result.ok:
+                return link_result
+            text_only = _render("")
+            while "\n\n\n" in text_only:
+                text_only = text_only.replace("\n\n\n", "\n\n")
+            text_result = self._post_text(phone=phone, body=text_only.strip() or body)
+            if not text_result.ok:
+                return text_result
+            return WhatsAppSendResult(
+                True,
+                detail="sent_link_then_text",
+                message_id=text_result.message_id or link_result.message_id,
+            )
+
+        if display_url and all("{" + k + "}" not in tpl for k in url_keys) and display_url not in body:
+            body = f"{body}\n\n{display_url}"
+        return self._post_text(phone=phone, body=body)
+
     def list_groups(self, *, count: int = 100, offset: int = 0) -> dict:
         """
         List WhatsApp groups for this Whapi channel.
